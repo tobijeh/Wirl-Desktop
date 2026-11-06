@@ -15,8 +15,10 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Use whisper-rs-sys's bundled bindings (no libclang needed).
-  WHISPER_DONT_GENERATE_BINDINGS: "1"
+  # whisper-rs-sys generates its bindings with bindgen on the Windows runner
+  # (LLVM is preinstalled there). Its bundled bindings are for Linux and don't
+  # compile for MSVC.
+  LIBCLANG_PATH: C:\Program Files\LLVM\bin
 
 jobs:
   lint-and-test:
@@ -94,8 +96,12 @@ jobs:
 
       - run: npm ci
 
+      # Pull request builds aren't signed; only the Release workflow has the key.
       - name: Build installer
-        run: npm run tauri build -- --target x86_64-pc-windows-msvc
+        shell: pwsh
+        run: |
+          @{ bundle = @{ createUpdaterArtifacts = $false } } | ConvertTo-Json | Set-Content -Path "$env:RUNNER_TEMP/tauri.ci.conf.json" -Encoding utf8
+          npm run tauri build -- --target x86_64-pc-windows-msvc --config "$env:RUNNER_TEMP/tauri.ci.conf.json"
 
       - uses: actions/upload-artifact@v4
         with:

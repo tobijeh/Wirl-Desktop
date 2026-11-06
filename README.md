@@ -28,6 +28,8 @@ Select text and press **Ctrl+Alt+C** to clean it up; press it again straight awa
 
 Wirl updates itself from this repository's GitHub Releases. Every release is signed, and the app checks the signature before installing. GitHub Actions needs the **private** signing key to sign releases. It's the only secret this repo needs.
 
+**The key is optional.** Without it, every push to `main` still publishes the installer, but installs from it don't update themselves: download the newest installer from Releases to update (settings and the dictionary are kept). Once you add the key, new releases are signed. Copies installed from an unsigned release need one manual reinstall from a signed release before they start updating themselves.
+
 **1. Create the key pair** (on your own computer, once). You need [Node.js](https://nodejs.org) installed. In PowerShell:
 
 ```powershell
@@ -51,7 +53,7 @@ When it asks for a password, you can press Enter twice for no password (simplest
 - Name: `WIRL_UPDATER_PUBKEY`
 - Value: the entire contents of `wirl.key.pub` (`Get-Content "$HOME\.tauri\wirl.key.pub" | Set-Clipboard`).
 
-**4. Release.** Every push to `main` now builds the installer and publishes a release `vX.Y.Z` with `latest.json` for the updater (the patch number goes up by one each time; change `version` in `src-tauri/tauri.conf.json` to start a new minor/major series). Until the key is added, the Release workflow skips publishing and shows a warning instead of failing. You can also start it from **Actions › Release › Run workflow**.
+**4. Release.** Every push to `main` now builds the installer and publishes a release `vX.Y.Z` with `latest.json` for the updater (the patch number goes up by one each time; change `version` in `src-tauri/tauri.conf.json` to start a new minor/major series). Until the key is added, the Release workflow publishes an installer without auto-updates and shows a warning. You can also start it from **Actions › Release › Run workflow**.
 
 Installed copies check for updates on launch and once a day, download in the background, and show **Update ready** (green dot) in the tray. The update installs when you choose **Restart to update** or when you quit Wirl.
 

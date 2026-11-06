@@ -1,10 +1,13 @@
 # On every push to main: pick the next version, build the installer, and
-# publish a GitHub Release with the Tauri updater manifest (latest.json).
+# publish a GitHub Release.
 #
-# Needs (see README "Updates and the signing key"):
-#   secret   TAURI_SIGNING_PRIVATE_KEY            (required)
+# Optional, for auto-updates (see README "Updates and the signing key"):
+#   secret   TAURI_SIGNING_PRIVATE_KEY            (the private key)
 #   secret   TAURI_SIGNING_PRIVATE_KEY_PASSWORD   (only if you set a password)
 #   variable WIRL_UPDATER_PUBKEY                  (the public key, not secret)
+# With them, the release is signed and includes the updater manifest
+# (latest.json). Without them, the installer is still published, but installs
+# from it don't update themselves.
 name: Release
 
 on:
@@ -39,20 +42,20 @@ jobs:
           PUBKEY: ${{ vars.WIRL_UPDATER_PUBKEY }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:KEY) -or [string]::IsNullOrWhiteSpace($env:PUBKEY)) {
-            "ok=false" >> $env:GITHUB_OUTPUT
-            $msg = "Release skipped: add the TAURI_SIGNING_PRIVATE_KEY secret and the WIRL_UPDATER_PUBKEY variable (see README, 'Updates and the signing key')."
+            "signed=false" >> $env:GITHUB_OUTPUT
+            $msg = "No signing key: publishing an installer without auto-updates. Add the TAURI_SIGNING_PRIVATE_KEY secret and the WIRL_UPDATER_PUBKEY variable to turn them on (see README, 'Updates and the signing key')."
             Write-Host "::warning::$msg"
             "### $msg" >> $env:GITHUB_STEP_SUMMARY
           } else {
-            "ok=true" >> $env:GITHUB_OUTPUT
+            "signed=true" >> $env:GITHUB_OUTPUT
           }
 
       - name: Next version
-        if: steps.keys.outputs.ok == 'true'
         id: version
         shell: pwsh
         env:
           PUBKEY: ${{ vars.WIRL_UPDATER_PUBKEY }}
+          SIGNED: ${{ steps.keys.outputs.signed }}
         run: |
           $base = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
           $parts = $base.Split('.')
@@ -64,26 +67,26 @@ jobs:
           $next = "$mm.$($max + 1)"
           Write-Host "Releasing $next"
           "version=$next" >> $env:GITHUB_OUTPUT
-          $cfg = @{
-            version = $next
-            bundle  = @{ createUpdaterArtifacts = $true }
-            plugins = @{ updater = @{ pubkey = $env:PUBKEY.Trim() } }
-          } | ConvertTo-Json -Depth 5
+          if ($env:SIGNED -eq 'true') {
+            $cfg = @{
+              version = $next
+              bundle  = @{ createUpdaterArtifacts = $true }
+              plugins = @{ updater = @{ pubkey = $env:PUBKEY.Trim() } }
+            } | ConvertTo-Json -Depth 5
+          } else {
+            $cfg = @{ version = $next } | ConvertTo-Json -Depth 5
+          }
           Set-Content -Path "$env:GITHUB_WORKSPACE/tauri.release.conf.json" -Value $cfg -Encoding utf8
 
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.keys.outputs.ok == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: steps.keys.outputs.ok == 'true'
         with:
           shared-key: build
       - uses: actions/setup-node@v4
-        if: steps.keys.outputs.ok == 'true'
         with:
           node-version: 22
           cache: npm
       - name: Vulkan SDK
-        if: steps.keys.outputs.ok == 'true'
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
           vulkan_version: latest
@@ -92,19 +95,15 @@ jobs:
           stripdown: true
 
       - name: Icons
-        if: steps.keys.outputs.ok == 'true'
         run: cargo run -p wirl-icons -- all
 
       - name: Whisper sidecars
-        if: steps.keys.outputs.ok == 'true'
         shell: pwsh
         run: ./scripts/build-sidecars.ps1
 
-      - if: steps.keys.outputs.ok == 'true'
-        run: npm ci
+      - run: npm ci
 
       - name: Build and publish release
-        if: steps.keys.outputs.ok == 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -117,9 +116,9 @@ jobs:
           releaseName: Wirl ${{ steps.version.outputs.version }}
           releaseBody: |
             Download and run the `Wirl_..._x64-setup.exe` installer below.
-            Already installed? Wirl updates itself: look for "Restart to update" in the tray menu.
+            ${{ steps.keys.outputs.signed == 'true' && 'Already installed? Wirl updates itself: look for "Restart to update" in the tray menu.' || 'This build does not update itself. To update, download the newest installer from Releases and run it; your settings and dictionary are kept.' }}
             First install: if Windows shows "Windows protected your PC", click **More info**, then **Run anyway** (Wirl isn't code-signed).
           releaseDraft: false
           prerelease: false
-          includeUpdaterJson: true
+          includeUpdaterJson: ${{ steps.keys.outputs.signed == 'true' }}
           updaterJsonPreferNsis: true

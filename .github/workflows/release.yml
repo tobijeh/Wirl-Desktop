@@ -1,0 +1,125 @@
+# On every push to main: pick the next version, build the installer, and
+# publish a GitHub Release with the Tauri updater manifest (latest.json).
+#
+# Needs (see README "Updates and the signing key"):
+#   secret   TAURI_SIGNING_PRIVATE_KEY            (required)
+#   secret   TAURI_SIGNING_PRIVATE_KEY_PASSWORD   (only if you set a password)
+#   variable WIRL_UPDATER_PUBKEY                  (the public key, not secret)
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  WHISPER_DONT_GENERATE_BINDINGS: "1"
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check signing key
+        id: keys
+        shell: pwsh
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          PUBKEY: ${{ vars.WIRL_UPDATER_PUBKEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:KEY) -or [string]::IsNullOrWhiteSpace($env:PUBKEY)) {
+            "ok=false" >> $env:GITHUB_OUTPUT
+            $msg = "Release skipped: add the TAURI_SIGNING_PRIVATE_KEY secret and the WIRL_UPDATER_PUBKEY variable (see README, 'Updates and the signing key')."
+            Write-Host "::warning::$msg"
+            "### $msg" >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            "ok=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Next version
+        if: steps.keys.outputs.ok == 'true'
+        id: version
+        shell: pwsh
+        env:
+          PUBKEY: ${{ vars.WIRL_UPDATER_PUBKEY }}
+        run: |
+          $base = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $parts = $base.Split('.')
+          $mm = "$($parts[0]).$($parts[1])"
+          $max = -1
+          foreach ($t in (git tag --list "v$mm.*")) {
+            if ($t -match "^v$([regex]::Escape($mm))\.(\d+)$") { $max = [Math]::Max($max, [int]$Matches[1]) }
+          }
+          $next = "$mm.$($max + 1)"
+          Write-Host "Releasing $next"
+          "version=$next" >> $env:GITHUB_OUTPUT
+          $cfg = @{
+            version = $next
+            bundle  = @{ createUpdaterArtifacts = $true }
+            plugins = @{ updater = @{ pubkey = $env:PUBKEY.Trim() } }
+          } | ConvertTo-Json -Depth 5
+          Set-Content -Path "$env:GITHUB_WORKSPACE/tauri.release.conf.json" -Value $cfg -Encoding utf8
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.keys.outputs.ok == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.keys.outputs.ok == 'true'
+        with:
+          shared-key: build
+      - uses: actions/setup-node@v4
+        if: steps.keys.outputs.ok == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - name: Vulkan SDK
+        if: steps.keys.outputs.ok == 'true'
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: latest
+          install_runtime: true
+          cache: true
+          stripdown: true
+
+      - name: Icons
+        if: steps.keys.outputs.ok == 'true'
+        run: cargo run -p wirl-icons -- all
+
+      - name: Whisper sidecars
+        if: steps.keys.outputs.ok == 'true'
+        shell: pwsh
+        run: ./scripts/build-sidecars.ps1
+
+      - if: steps.keys.outputs.ok == 'true'
+        run: npm ci
+
+      - name: Build and publish release
+        if: steps.keys.outputs.ok == 'true'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: npm run tauri
+          args: --target x86_64-pc-windows-msvc --config ${{ github.workspace }}/tauri.release.conf.json
+          tagName: v${{ steps.version.outputs.version }}
+          releaseName: Wirl ${{ steps.version.outputs.version }}
+          releaseBody: |
+            Download and run the `Wirl_..._x64-setup.exe` installer below.
+            Already installed? Wirl updates itself: look for "Restart to update" in the tray menu.
+            First install: if Windows shows "Windows protected your PC", click **More info**, then **Run anyway** (Wirl isn't code-signed).
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true

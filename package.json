@@ -1,0 +1,14 @@
+{
+  "name": "wirl-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Wirl for Windows: dictation in any text box.",
+  "scripts": {
+    "tauri": "tauri",
+    "icons": "cargo run -p wirl-icons -- all",
+    "check-ui": "node scripts/check-ui.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0"
+  }
+}

@@ -1,0 +1,9 @@
+/target
+node_modules/
+/src-tauri/gen/
+/src-tauri/binaries/
+# Generated from ui/assets/icons by `cargo run -p wirl-icons -- generate`
+/src-tauri/icons/
+.env
+*.key
+*.key.pub

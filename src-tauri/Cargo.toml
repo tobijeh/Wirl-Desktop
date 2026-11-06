@@ -1,0 +1,70 @@
+[package]
+name = "wirl"
+description = "Wirl: dictation in any text box. Local Whisper, Claude cleanup."
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "wirl_lib"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "wirl"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+wirl-core = { path = "../crates/wirl-core" }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-process = "2"
+tauri-plugin-dialog = "2"
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+uuid.workspace = true
+log.workspace = true
+tokio.workspace = true
+parking_lot = "0.12"
+cpal = "0.15"
+image = { version = "0.25", default-features = false, features = ["png"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
+mdns-sd = "0.13"
+if-addrs = "0.13"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+hostname = "0.4"
+simplelog = "0.12"
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
+  "Win32_System_Registry",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+  "Media_Control",
+  "Foundation",
+  "Foundation_Collections",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(not(any(windows, target_os = "macos")))'.dependencies]
+keyring = { version = "3" }
+
+[features]
+# Passed by `tauri build`/`tauri dev`.
+custom-protocol = ["tauri/custom-protocol"]

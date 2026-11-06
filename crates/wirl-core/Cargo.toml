@@ -1,0 +1,31 @@
+[package]
+name = "wirl-core"
+description = "Platform-independent logic for Wirl: cleanup prompt, dictionary, sync protocol, chunking, hotkeys, pill state."
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["net"]
+# The Claude HTTP client and the model downloader. Off for pure-logic consumers.
+net = ["dep:reqwest", "dep:tokio", "dep:futures-util"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+log.workspace = true
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+rand = "0.8"
+regex = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json", "http2"], optional = true }
+tokio = { workspace = true, optional = true }
+futures-util = { version = "0.3", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }

@@ -47,8 +47,10 @@ pub fn encode_pcm(samples: &[f32]) -> String {
 pub fn decode_pcm(b64: &str) -> Result<Vec<f32>, String> {
     let bytes = B64.decode(b64).map_err(|e| e.to_string())?;
     Ok(bytes
-        .chunks_exact(2)
-        .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / i16::MAX as f32)
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| i16::from_le_bytes(*c) as f32 / i16::MAX as f32)
         .collect())
 }
 

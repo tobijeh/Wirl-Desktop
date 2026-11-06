@@ -24,38 +24,21 @@ It's the desktop version of Wirl for Android. Both apps share a personal diction
 Then press **Ctrl+Alt+Space** in any app. Hold it while you talk and let go to insert, or tap it once to start and again to stop. **Esc** cancels.
 Select text and press **Ctrl+Alt+C** to clean it up; press it again straight away to undo.
 
-## Updates and the signing key (one-time setup for the repo owner)
+## Updates and the signing key
 
-Wirl updates itself from this repository's GitHub Releases. Every release is signed, and the app checks the signature before installing. GitHub Actions needs the **private** signing key to sign releases. It's the only secret this repo needs.
+Wirl updates itself from this repository's GitHub Releases. Every release is signed, and the app checks the signature before installing.
 
-**The key is optional.** Without it, every push to `main` still publishes the installer, but installs from it don't update themselves: download the newest installer from Releases to update (settings and the dictionary are kept). Once you add the key, new releases are signed. Copies installed from an unsigned release need one manual reinstall from a signed release before they start updating themselves.
+**This is set up.** The key has no password.
 
-**1. Create the key pair** (on your own computer, once). You need [Node.js](https://nodejs.org) installed. In PowerShell:
+- The **public key** is in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`). It isn't secret.
+- The **private key** is the `TAURI_SIGNING_PRIVATE_KEY` secret (Settings › Secrets and variables › Actions) and, as a backup, on the owner's PC (`%USERPROFILE%\.tauri\wirl.key`). It is never committed: `.gitignore` blocks `*.key`.
+- The Release workflow sets `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to an empty string, because the key has no password.
 
-```powershell
-npx @tauri-apps/cli@2 signer generate -w "$HOME\.tauri\wirl.key"
-```
-
-When it asks for a password, you can press Enter twice for no password (simplest). It creates two files:
-
-- `%USERPROFILE%\.tauri\wirl.key`: the **private key**. Keep it secret and back it up (for example in your password manager). If you lose it, existing installs can't receive updates.
-- `%USERPROFILE%\.tauri\wirl.key.pub`: the **public key**. Not secret.
-
-**2. Add the private key as a secret.** On GitHub: this repo › **Settings** › **Secrets and variables** › **Actions** › **Secrets** tab › **New repository secret**.
-
-- Name: `TAURI_SIGNING_PRIVATE_KEY`
-- Secret: the entire contents of `wirl.key`. To copy it: `Get-Content "$HOME\.tauri\wirl.key" | Set-Clipboard`, then paste.
-- Click **Add secret**.
-- Only if you chose a password in step 1: add a second secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` with that password.
-
-**3. Add the public key as a variable.** Same page, **Variables** tab › **New repository variable**.
-
-- Name: `WIRL_UPDATER_PUBKEY`
-- Value: the entire contents of `wirl.key.pub` (`Get-Content "$HOME\.tauri\wirl.key.pub" | Set-Clipboard`).
-
-**4. Release.** Every push to `main` now builds the installer and publishes a release `vX.Y.Z` with `latest.json` for the updater (the patch number goes up by one each time; change `version` in `src-tauri/tauri.conf.json` to start a new minor/major series). Until the key is added, the Release workflow publishes an installer without auto-updates and shows a warning. You can also start it from **Actions › Release › Run workflow**.
+**Releasing.** Every push to `main` builds the installer and publishes a release `vX.Y.Z` (the patch number goes up by one each time; change `version` in `src-tauri/tauri.conf.json` to start a new minor or major series). Each release has the installer `Wirl_X.Y.Z_x64-setup.exe`, its signature `.sig`, and `latest.json`, which installed copies check. You can also start it from **Actions › Release › Run workflow**. If the secret is missing, the release fails with a message saying so.
 
 Installed copies check for updates on launch and once a day, download in the background, and show **Update ready** (green dot) in the tray. The update installs when you choose **Restart to update** or when you quit Wirl.
+
+**If the private key is ever lost or leaked:** make a new pair (`npx.cmd @tauri-apps/cli@2 signer generate -w "$HOME\.tauri\wirl.key"`, press Enter twice for no password), replace the secret, and put the new public key in `tauri.conf.json`. Copies installed before that can't verify the new signature, so they need one manual reinstall from the next release.
 
 ## Develop
 

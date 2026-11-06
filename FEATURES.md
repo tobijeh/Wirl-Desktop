@@ -60,5 +60,5 @@ Status per platform.
 | **Reliability** | Timeouts on model load, transcription, API | ✅ | ❔ |
 | | 30 s watchdog | ✅ | ❔ |
 | | Diagnostics: last 20 entries with per-stage timing | ✅ | ❔ |
-| **Updates** | Signed auto-updates from GitHub Releases, daily check, "Restart to update" | 🟢 (needs signing key, see README) | ⬜ |
+| **Updates** | Signed auto-updates from GitHub Releases, daily check, "Restart to update" | 🟢 (signing key set up; needs a check that an installed copy updates) | ⬜ |
 | | CI on pull requests, automatic release on main | 🟢 | ⬜ |

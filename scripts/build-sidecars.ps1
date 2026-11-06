@@ -8,7 +8,9 @@
 # on any x64 machine with AVX2, not just the build machine.
 #
 # Needs: Rust (MSVC), CMake, LLVM/clang (bindgen), and for Vulkan the
-# Vulkan SDK with VULKAN_SDK set.
+# Vulkan SDK with VULKAN_SDK set. Run it from a "Developer PowerShell for VS"
+# with $env:CMAKE_GENERATOR = "Ninja" (as CI does): under the Visual Studio
+# generator, whisper.cpp's vulkan-shaders-gen sub-build can't find the compiler.
 param([switch]$CpuOnly)
 $ErrorActionPreference = "Stop"
 

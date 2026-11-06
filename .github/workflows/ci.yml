@@ -1,0 +1,104 @@
+# Pull request checks: lint, unit tests, and a full Windows build.
+# No API keys are used here; the Claude quality test is run manually only.
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Use whisper-rs-sys's bundled bindings (no libclang needed).
+  WHISPER_DONT_GENERATE_BINDINGS: "1"
+
+jobs:
+  lint-and-test:
+    name: Lint and unit tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lint
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Icons (from wirl-icons.zip / ui/assets/icons)
+        run: cargo run -p wirl-icons -- all
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: UI scripts
+        run: node scripts/check-ui.mjs
+
+      # tauri-build checks that bundled sidecars exist; lint doesn't need real ones.
+      - name: Placeholder sidecars for type-checking
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          foreach ($n in "wirl-whisper", "wirl-whisper-cpu") {
+            New-Item -ItemType File -Force -Path "src-tauri/binaries/$n-x86_64-pc-windows-msvc.exe" | Out-Null
+          }
+
+      - name: Clippy
+        run: cargo clippy --workspace --exclude wirl-whisper --all-targets -- -D warnings
+
+      - name: Unit tests
+        run: cargo test --workspace --exclude wirl-whisper
+
+  build:
+    name: Windows build
+    runs-on: windows-latest
+    needs: lint-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build
+          workspaces: |
+            . -> target
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: latest
+          install_runtime: true
+          cache: true
+          stripdown: true
+
+      - name: Icons
+        run: cargo run -p wirl-icons -- all
+
+      - name: Whisper sidecars (Release, AVX2, Vulkan + CPU)
+        shell: pwsh
+        run: ./scripts/build-sidecars.ps1
+
+      - name: Sidecar check (Whisper clippy)
+        run: cargo clippy -p wirl-whisper --target x86_64-pc-windows-msvc --target-dir target/sidecar-cpu -- -D warnings
+
+      - run: npm ci
+
+      - name: Build installer
+        run: npm run tauri build -- --target x86_64-pc-windows-msvc
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wirl-installer
+          path: target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          if-no-files-found: error

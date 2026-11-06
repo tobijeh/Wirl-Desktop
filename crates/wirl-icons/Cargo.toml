@@ -1,0 +1,10 @@
+[package]
+name = "wirl-icons"
+description = "Imports wirl-icons.zip and generates the app/tray icon files from the provided PNGs."
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+wirl-core = { path = "../wirl-core", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }

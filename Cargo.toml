@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = ["crates/wirl-core", "crates/wirl-whisper", "crates/wirl-icons", "src-tauri"]
+default-members = ["crates/wirl-core", "crates/wirl-icons"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/tobijeh/Wirl-Desktop"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "process", "net", "fs"] }
+log = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# whisper.cpp is compiled by cmake; keep it optimised even in dev builds.
+[profile.dev.package.whisper-rs-sys]
+opt-level = 3

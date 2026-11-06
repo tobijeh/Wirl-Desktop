@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wirl</title>
+    <link rel="stylesheet" href="theme.css" />
+    <link rel="stylesheet" href="settings.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <img id="brand-icon" alt="" />
+        <span>Wirl</span>
+      </div>
+      <nav id="nav">
+        <a data-page="home">Home</a>
+        <a data-page="dictation">Dictation</a>
+        <a data-page="cleanup">AI cleanup</a>
+        <a data-page="dictionary">Dictionary</a>
+        <a data-page="hotkeys">Hotkeys</a>
+        <a data-page="indicator">Indicator</a>
+        <a data-page="setup">Setup <span class="dot" id="setup-dot" hidden></span></a>
+        <a data-page="about">About</a>
+      </nav>
+    </aside>
+    <main id="main"></main>
+    <div id="toast" class="toast" hidden></div>
+    <script type="module" src="settings.js"></script>
+  </body>
+</html>

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Wirl's own windows: settings and the pill.",
+  "windows": ["settings", "pill"],
+  "permissions": ["core:default"]
+}

@@ -1,0 +1,19 @@
+[package]
+name = "wirl-whisper"
+description = "Whisper sidecar process for Wirl. Crashes here never take down the app."
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "wirl-whisper"
+path = "src/main.rs"
+
+[features]
+default = []
+# GPU acceleration through Vulkan (whisper.cpp falls back to CPU if no device).
+vulkan = ["whisper-rs/vulkan"]
+
+[dependencies]
+wirl-core = { path = "../wirl-core", default-features = false }
+serde_json.workspace = true
+whisper-rs = "0.16"

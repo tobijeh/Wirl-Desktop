@@ -96,6 +96,8 @@ jobs:
       - name: Whisper sidecars
         env:
           CMAKE_GENERATOR: Ninja
+          # Short build folder: the Vulkan build's nested paths pass the Windows path limit under D:\a\...
+          WIRL_SIDECAR_TARGET: C:\s
         shell: pwsh
         run: ./scripts/build-sidecars.ps1
 

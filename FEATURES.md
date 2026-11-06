@@ -43,7 +43,7 @@ Status per platform.
 | | Follows the active window's monitor; bottom/top center or near mouse | ✅ placement / 🟢 Windows | ⬜ |
 | | Recording / Processing / Inserted / Cleaned / Copied / Error states | ✅ | ⬜ |
 | | Size (small/medium/large), status-messages toggle | ✅ | ⬜ |
-| **Icons** | 25 provided icons, picker in icons.json order | 🟢 (waiting for `wirl-icons.zip`) | ❔ |
+| **Icons** | 25 provided icons, picker in icons.json order | ✅ (cut from `wirl-icons-sheet.png`) | ❔ |
 | | Tray states: Ready, Recording, Processing, Off, Needs attention, Update ready | ✅ | ⬜ |
 | **Dictionary** | Add, edit, delete (tombstones), search, alphabetical | ✅ | 🔵 |
 | | Phonetic + case-insensitive matching | ✅ | ❔ |

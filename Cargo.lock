@@ -6363,6 +6363,7 @@ name = "wirl-icons"
 version = "0.1.0"
 dependencies = [
  "image",
+ "serde_json",
  "wirl-core",
  "zip 2.6.1",
 ]

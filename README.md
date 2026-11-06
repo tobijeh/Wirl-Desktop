@@ -61,13 +61,13 @@ Requirements: Windows 10/11 x64, [Rust](https://rustup.rs) (MSVC), Node.js 22, C
 
 ```powershell
 npm ci
-cargo run -p wirl-icons -- all              # imports wirl-icons.zip (if present) and builds app icons
+cargo run -p wirl-icons -- all              # imports the icons (sheet or zip) if needed and builds app icons
 ./scripts/build-sidecars.ps1                # Whisper sidecars (add -CpuOnly to skip Vulkan)
 npm run tauri dev                           # run
 cargo test --workspace --exclude wirl-whisper
 ```
 
-The icons in `wirl-icons.zip` are used exactly as provided: `wirl-icons` unzips them into `ui/assets/icons/` (then deletes the zip) and only scales the default icon into the `.ico`/`.png` sizes Windows needs.
+The icons are used exactly as provided. They come from `wirl-icons-sheet.png`, a 5×5 sheet: `cargo run -p wirl-icons -- slice` copies each 128×128 icon out of it pixel for pixel into `ui/assets/icons/` and writes `icons.json` (order as on the sheet, default `swirl`). These files are committed. A `wirl-icons.zip`, if added, is unzipped there instead (then deleted). `generate` only scales the default icon into the `.ico`/`.png` sizes Windows needs.
 
 ### Cleanup quality test (manual, uses your key)
 

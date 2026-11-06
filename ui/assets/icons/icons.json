@@ -1,0 +1,130 @@
+{
+  "default": "swirl",
+  "icons": [
+    {
+      "file": "swirl.png",
+      "id": "swirl",
+      "name": "Swirl"
+    },
+    {
+      "file": "microphone.png",
+      "id": "microphone",
+      "name": "Microphone"
+    },
+    {
+      "file": "book.png",
+      "id": "book",
+      "name": "Book"
+    },
+    {
+      "file": "text-sparkle.png",
+      "id": "text-sparkle",
+      "name": "Text Sparkle"
+    },
+    {
+      "file": "send.png",
+      "id": "send",
+      "name": "Send"
+    },
+    {
+      "file": "keyboard.png",
+      "id": "keyboard",
+      "name": "Keyboard"
+    },
+    {
+      "file": "message.png",
+      "id": "message",
+      "name": "Message"
+    },
+    {
+      "file": "sparkles.png",
+      "id": "sparkles",
+      "name": "Sparkles"
+    },
+    {
+      "file": "sprout.png",
+      "id": "sprout",
+      "name": "Sprout"
+    },
+    {
+      "file": "paw.png",
+      "id": "paw",
+      "name": "Paw"
+    },
+    {
+      "file": "palette.png",
+      "id": "palette",
+      "name": "Palette"
+    },
+    {
+      "file": "wave.png",
+      "id": "wave",
+      "name": "Wave"
+    },
+    {
+      "file": "mountains.png",
+      "id": "mountains",
+      "name": "Mountains"
+    },
+    {
+      "file": "tree.png",
+      "id": "tree",
+      "name": "Tree"
+    },
+    {
+      "file": "butterfly.png",
+      "id": "butterfly",
+      "name": "Butterfly"
+    },
+    {
+      "file": "bee.png",
+      "id": "bee",
+      "name": "Bee"
+    },
+    {
+      "file": "hummingbird.png",
+      "id": "hummingbird",
+      "name": "Hummingbird"
+    },
+    {
+      "file": "dolphin.png",
+      "id": "dolphin",
+      "name": "Dolphin"
+    },
+    {
+      "file": "seahorse.png",
+      "id": "seahorse",
+      "name": "Seahorse"
+    },
+    {
+      "file": "jellyfish.png",
+      "id": "jellyfish",
+      "name": "Jellyfish"
+    },
+    {
+      "file": "whale.png",
+      "id": "whale",
+      "name": "Whale"
+    },
+    {
+      "file": "turtle.png",
+      "id": "turtle",
+      "name": "Turtle"
+    },
+    {
+      "file": "hummingbird-2.png",
+      "id": "hummingbird-2",
+      "name": "Hummingbird 2"
+    },
+    {
+      "file": "rocket.png",
+      "id": "rocket",
+      "name": "Rocket"
+    },
+    {
+      "file": "pizza.png",
+      "id": "pizza",
+      "name": "Pizza"
+    }
+  ]
+}

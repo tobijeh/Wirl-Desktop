@@ -34,7 +34,7 @@ jobs:
         with:
           node-version: 22
 
-      - name: Icons (from wirl-icons.zip / ui/assets/icons)
+      - name: Icons (ui/assets/icons → src-tauri/icons)
         run: cargo run -p wirl-icons -- all
 
       - name: Format

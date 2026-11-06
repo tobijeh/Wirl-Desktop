@@ -11,7 +11,7 @@ A system-tray dictation app: hotkey → record → Whisper (local) → Claude cl
 1. **No API keys in the repo or in GitHub Actions.** Each user enters their own Anthropic key in Setup; it lives in Windows Credential Manager (`keyring`). The quality-test script reads `ANTHROPIC_API_KEY` from the environment at run time and never saves it. Never add a workflow step that calls the Claude API.
 2. **The core cleanup prompt is fixed.** `wirl_core::prompt::CORE_PROMPT` must match the product spec character for character and is not user-editable. Only style notes and matching dictionary entries are appended (in that order, under the exact headers in `prompt.rs`).
 3. **Cleanup request:** model `claude-haiku-5-5`, `thinking: {type: "disabled"}`, `output_config.effort: "low"`, no sampling parameters, streamed. One shared function (`ClaudeClient::cleanup`) for dictation, clean-selection and the quality script.
-4. **Icons are used exactly as provided.** The 25 PNGs from `wirl-icons.zip` (in `ui/assets/icons/`, order and default from `icons.json`) are never redrawn, restyled or substituted. Only scaling for `.ico`/tray sizes and the tray-state overlays (red ring, dimming, greyscale, amber badge, green dot) are allowed.
+4. **Icons are used exactly as provided.** The 25 PNGs cut from `wirl-icons-sheet.png` (or a `wirl-icons.zip`) (in `ui/assets/icons/`, order and default from `icons.json`) are never redrawn, restyled or substituted. Only scaling for `.ico`/tray sizes and the tray-state overlays (red ring, dimming, greyscale, amber badge, green dot) are allowed.
 5. **Sync protocol is shared with Android.** Any change must be made in `docs/sync-protocol.md` first and stay wire-compatible. The `known_test_vector` test pins the crypto.
 6. **Whisper runs in a sidecar process** (`crates/wirl-whisper`). Never link whisper.cpp into the app process. If the sidecar dies, the app logs why, fails pending requests, restarts it and reloads the model.
 7. **Nothing heavy on the UI thread.** Capture has its own thread, Whisper its own process, clipboard/SendInput work runs in `spawn_blocking`. Every stage has a timeout (`wirl_core::pipeline`); the watchdog resets anything busy over 30 s.
@@ -34,7 +34,7 @@ crates/wirl-core      pure logic (unit tested, builds anywhere)
   pipeline.rs         discard rules, cleanup fallback, timeouts
   settings.rs, models.rs (catalog + resumable verified download), ipc.rs, icons.rs, diagnostics.rs, watchdog.rs
 crates/wirl-whisper   sidecar: JSON lines over stdin/stdout, whisper-rs
-crates/wirl-icons     unzip wirl-icons.zip → ui/assets/icons, generate src-tauri/icons
+crates/wirl-icons     slice wirl-icons-sheet.png / unzip wirl-icons.zip → ui/assets/icons, generate src-tauri/icons
 src-tauri/src
   lib.rs              plugins, setup, run loop (closing the window keeps Wirl in the tray)
   app.rs              shared state (App), session counter, attention items
@@ -79,7 +79,7 @@ cargo test --workspace --exclude wirl-whisper     # unit tests
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 node scripts/check-ui.mjs                          # UI syntax
-cargo run -p wirl-icons -- all                     # icons (needs wirl-icons.zip or ui/assets/icons)
+cargo run -p wirl-icons -- all                     # icons (ui/assets/icons, else wirl-icons-sheet.png or wirl-icons.zip)
 ./scripts/build-sidecars.ps1                       # Windows sidecars
 npm run tauri dev
 cargo run -p wirl-core --example cleanup_quality   # manual, needs ANTHROPIC_API_KEY in your shell

@@ -65,6 +65,11 @@ ui/                   settings.html/js, pill.html/js, pill-view.js (shared rende
 
 Copy selection → `UndoTracker::on_hotkey`. Same text as the last cleanup → paste the original (undo). No selection but armed → re-select the pasted text with Shift+Left, compare, undo if unchanged; otherwise collapse the selection and reset. Different text → clean it.
 
+## Phone pairing (desktop side)
+
+- A pairing code stays valid until a phone's first sync uses it or 15 minutes pass. Closing the QR panel only hides it ("Waiting for your phone…"); only "Cancel pairing" withdraws it. The phone's first sync arrives a few seconds after the scan, so never tie the code to the panel being open.
+- A refused sync (401) sets `sync_rejected_ms`, which the Dictionary page shows as an amber "didn't recognize its pairing" note until the next successful sync. Every successful sync calls `notify()` so the page updates.
+
 ## Welcome tour (onboarding)
 
 - First launch opens the settings window on `#tour` (full window, no sidebar): Welcome → Get ready (only if the microphone or API key is missing; the speech model starts downloading in the background) → Try talking → Tidy up some text → You're all set. `first_run_done` is set only when the tour is finished or skipped, so closing the window halfway brings it back next launch. Anyone can replay it from Setup ("Take the tour") or the Home shortcut card.

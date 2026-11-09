@@ -88,6 +88,8 @@ pub fn get_state() -> Value {
         "diagnostics": diagnostics,
         "lastError": a.last_error.lock().clone(),
         "computerName": sync_server::computer_name(),
+        "pairingPending": a.pairing.lock().as_ref().is_some_and(|p| wirl_core::dictionary::now_ms() - p.created_ms < app::PAIRING_TTL_MS),
+        "syncRejectedMs": *a.sync_rejected_ms.lock(),
     })
 }
 
@@ -342,9 +344,14 @@ pub fn pair_begin() -> CmdResult<PairingInfo> {
     })
 }
 
+/// Withdraws the pairing code shown on screen (an explicit "Cancel pairing").
+/// Closing the QR panel doesn't call this: the code stays valid until a phone
+/// uses it or it expires, because the phone's first sync comes a little later.
 #[tauri::command]
 pub fn pair_cancel() {
-    *app::get().pairing.lock() = None;
+    let a = app::get();
+    *a.pairing.lock() = None;
+    a.notify();
 }
 
 #[tauri::command]

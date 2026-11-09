@@ -311,19 +311,31 @@ function pageDictionary() {
           : `<div class="muted">No phone paired yet.</div>`
       }
       <div class="divider"></div>
+      ${syncRejectedNote()}
       ${
         ui.pairing
           ? `<div class="row" style="align-items:flex-start;gap:22px">
               <div class="qr">${ui.pairing.svg}</div>
               <div class="grow stack">
-                <div>On your phone: Wirl › Dictionary › Pair with computer, then scan. Both devices sync when on the same Wi-Fi.</div>
-                <div class="muted small">If Windows Firewall asks, allow Wirl on Private networks.</div>
-                <button class="ghost" data-act="pair-cancel">Done</button>
+                <div>On your phone: Wirl › Dictionary › ⋮ › Pair with computer, then scan this code. Keep both on the same Wi-Fi.</div>
+                <div class="muted small">This closes by itself once your phone connects, usually within a minute. If Windows Firewall asks, allow Wirl on Private networks.</div>
+                <div class="row"><button class="ghost" data-act="pair-close">Close</button><a class="link small" data-act="pair-cancel">Cancel pairing</a></div>
               </div></div>`
-          : `<button class="primary" data-act="pair">Pair with phone</button>`
+          : S.pairingPending
+            ? `<div class="row"><span class="spinner-inline"></span><div class="grow">Waiting for your phone to connect. The code works for 15 minutes.</div>
+                <button class="ghost" data-act="pair">Show code</button><a class="link small" data-act="pair-cancel">Cancel</a></div>`
+            : `<button class="primary" data-act="pair">Pair with phone</button>`
       }
     </div>
   </div>`;
+}
+
+/** Amber note when a phone's sync was refused (it used a code this computer no longer knows). */
+function syncRejectedNote() {
+  const at = S.syncRejectedMs;
+  if (!at || Date.now() - at > 24 * 3600 * 1000) return "";
+  return `<div class="warning-box" style="margin-bottom:12px">A phone tried to sync ${ago(at)}, but this computer didn't recognize its pairing.
+    On the phone, tap <b>Pair again</b> (or Unpair, then Pair with computer), and scan a new code here.</div>`;
 }
 
 const HOTKEY_ROWS = [
@@ -950,6 +962,11 @@ async function act(name, el) {
       case "pair-from-setup":
         go("dictionary");
         await act("pair");
+        break;
+      case "pair-close":
+        // Only hides the code: it stays valid until the phone connects or it expires.
+        ui.pairing = null;
+        render();
         break;
       case "pair-cancel":
         ui.pairing = null;

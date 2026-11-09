@@ -43,7 +43,9 @@ jobs:
         run: cargo fmt --all --check
 
       - name: UI scripts
-        run: node scripts/check-ui.mjs
+        run: |
+          node scripts/check-ui.mjs
+          node scripts/test-ui.mjs
 
       # tauri-build checks that bundled sidecars exist; lint doesn't need real ones.
       - name: Placeholder sidecars for type-checking

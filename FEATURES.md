@@ -51,6 +51,10 @@ Status per platform.
 | **Phone sync** | QR pairing, mDNS `_wirl._tcp`, AES-256-GCM, merge rule | ✅ (protocol in docs/sync-protocol.md) | 🔵 |
 | | Paired phones with "Synced X min ago", Unpair | 🟢 | 🔵 |
 | | Private networks only | ✅ | 🔵 |
+| **Onboarding** | Welcome tour on first launch: try talking and tidying up in practice boxes, with the real hotkeys | ✅ logic / 🟢 Windows | ❔ |
+| | Replay the tour from Setup or Home | ✅ | ❔ |
+| | "Your two shortcuts" card on Home until each has been used 3 times | ✅ | ❔ |
+| | One-time "try clean-up" tip in the pill | ✅ | ❔ |
 | **App** | Tray menu: On/Off, Settings, Check for updates, Quit | 🟢 | ⬜ |
 | | Settings window (Home, Dictation, AI cleanup, Dictionary, Hotkeys, Indicator, Setup, About) | 🟢 | ❔ |
 | | Setup checklist, shown on first run; Test dictation | 🟢 | ❔ |

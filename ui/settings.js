@@ -1,10 +1,19 @@
 import { renderPill, makeWave } from "./pill-view.js";
+import {
+  DICTATION_SCRIPT,
+  MESSY_TEXT,
+  tourSteps,
+  dictationSummary,
+  cleanState,
+  dictateInstruction,
+  pillWhere,
+} from "./tour-logic.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
 const main = document.getElementById("main");
-const PAGES = ["home", "dictation", "cleanup", "dictionary", "hotkeys", "indicator", "setup", "about"];
+const PAGES = ["home", "dictation", "cleanup", "dictionary", "hotkeys", "indicator", "setup", "about", "tour"];
 
 let S = null;
 let page = PAGES.includes(location.hash.slice(1)) ? location.hash.slice(1) : "home";
@@ -24,6 +33,7 @@ const ui = {
   apiBusy: false,
   confirmReset: false,
   testText: "",
+  tour: null,
 };
 
 // ---------- helpers ----------
@@ -93,6 +103,8 @@ async function load() {
 function patchLive() {
   const t = main.querySelector('[data-act="test"]');
   if (t) t.textContent = S.phase === "recording" ? "Stop" : "Test dictation";
+  const ts = document.getElementById("tour-status");
+  if (ts) ts.innerHTML = tourStatus();
   document.getElementById("setup-dot").hidden = attentionCount() === 0;
 }
 
@@ -133,6 +145,7 @@ function pageHome() {
           : `<a class="warn-line link" data-go="setup" style="color:var(--warning)">${n} thing${n === 1 ? "" : "s"} need${n === 1 ? "s" : ""} attention</a>`
       }
     </div>
+    ${showShortcutCard() ? shortcutCard() : ""}
     <div class="grid2">
       ${cards
         .map(
@@ -145,6 +158,25 @@ function pageHome() {
       <label class="check grow"><input type="checkbox" data-setting="startWithWindows" ${s.startWithWindows ? "checked" : ""}> Start with Windows</label>
       <span class="muted small">Version ${esc(S.version)}</span>
     </div>
+  </div>`;
+}
+
+function showShortcutCard() {
+  const u = S.settings.usage || {};
+  return (u.dictations || 0) < 3 || (u.cleanups || 0) < 3;
+}
+
+function shortcutRows() {
+  return `<div class="shortcut-row"><kbd>${esc(S.hotkeys.dictate)}</kbd><div><b>Talk, and it types</b><div class="muted small">${
+    S.settings.holdToTalk ? "Hold while you speak, let go to insert." : "Press to start, press again to insert."
+  }</div></div></div>
+    <div class="shortcut-row"><kbd>${esc(S.hotkeys.cleanSelection)}</kbd><div><b>Tidy up selected text</b><div class="muted small">Press again right away to undo.</div></div></div>`;
+}
+
+function shortcutCard() {
+  return `<div class="card">
+    <div class="row"><h3 class="grow">Your two shortcuts</h3><a class="link small" data-act="tour-start">Take the tour again</a></div>
+    <div class="stack" style="margin-top:10px">${shortcutRows()}</div>
   </div>`;
 }
 
@@ -373,31 +405,42 @@ function checkItem(ok, title, body, fix) {
   </div>`;
 }
 
-function pageSetup() {
-  const st = S.setup;
-  const model = S.models.find((m) => m.id === S.settings.model);
-  const d = model?.download || {};
-  const pct = d.total ? Math.round((d.done / d.total) * 100) : 0;
-  const keyBody =
-    S.apiKey.saved && !ui.apiEditing
+function apiKeyBody() {
+  return S.apiKey.saved && !ui.apiEditing
       ? `${esc(S.apiKey.hint)} · <a class="link" data-act="api-change">Change</a> · <a class="link" data-act="api-remove">Remove</a>`
       : `Each person uses their own Anthropic API key. It's stored in Windows Credential Manager.
          <div class="row" style="margin-top:10px"><input type="password" id="api-key" class="grow" placeholder="sk-ant-..." autocomplete="off">
          <button class="primary" data-act="api-save" ${ui.apiBusy ? "disabled" : ""}>${ui.apiBusy ? "Checking…" : "Save"}</button></div>
          ${ui.apiError ? `<div class="error-text">${esc(ui.apiError)}</div>` : ""}
          <div class="small" style="margin-top:8px"><a class="link" data-act="open" data-url="https://console.anthropic.com/settings/keys">Get a key from the Anthropic Console</a></div>`;
+}
+
+function micItem() {
+  const st = S.setup;
+  return checkItem(
+    st.microphone,
+    "Microphone access",
+    st.microphone ? "Wirl can hear your microphone." : "Wirl can't use a microphone. Plug one in, or allow desktop apps to use it in Windows privacy settings.",
+    `<button class="warn" data-act="open" data-url="ms-settings:privacy-microphone">Fix</button>`,
+  );
+}
+
+function pageSetup() {
+  const st = S.setup;
+  const model = S.models.find((m) => m.id === S.settings.model);
+  const d = model?.download || {};
+  const pct = d.total ? Math.round((d.done / d.total) * 100) : 0;
   const recording = S.phase === "recording";
   return `<div class="page">
     <h1>Setup</h1>
     <p class="lead">A few things Wirl needs. Green means done.</p>
+    <div class="card row tour-invite">
+      <div class="grow"><h3>New to Wirl?</h3><div class="muted">A 2-minute tour of talking and tidying up, with practice boxes.</div></div>
+      <button class="primary" data-act="tour-start">Take the tour</button>
+    </div>
     <div class="card">
-      ${checkItem(st.apiKey, "API key", keyBody, "")}
-      ${checkItem(
-        st.microphone,
-        "Microphone access",
-        st.microphone ? "Wirl can hear your microphone." : "Wirl can't use a microphone. Plug one in, or allow desktop apps to use it in Windows privacy settings.",
-        `<button class="warn" data-act="open" data-url="ms-settings:privacy-microphone">Fix</button>`,
-      )}
+      ${checkItem(st.apiKey, "API key", apiKeyBody(), "")}
+      ${micItem()}
       ${checkItem(
         st.model,
         "Speech model",
@@ -470,6 +513,197 @@ function pageAbout() {
   </div>`;
 }
 
+// ---------- welcome tour ----------
+
+const MIC_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>';
+const SPARK_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>';
+
+function initTour() {
+  ui.tour = {
+    steps: tourSteps(S.setup),
+    step: "welcome",
+    dictText: "",
+    cleanText: MESSY_TEXT,
+    clean: "messy",
+  };
+}
+
+function tourModel() {
+  const m = S.models.find((x) => x.id === S.settings.model);
+  const d = m?.download || {};
+  return { m, d, pct: d.total ? Math.round((d.done / d.total) * 100) : 0 };
+}
+
+/** Starts the speech model download in the background, once. */
+function tourEnsureModel() {
+  const { m, d } = tourModel();
+  if (!m || m.ready || d.active || ui.tour.downloadAsked) return;
+  ui.tour.downloadAsked = true;
+  invoke("download_model", { id: m.id }).catch(() => {});
+}
+
+function tourStatus() {
+  const where = pillWhere(S.settings.pillPosition);
+  if (S.phase === "recording") return `<span class="live-dot"></span> Listening… The small bar ${where} means Wirl can hear you.`;
+  if (S.phase === "processing") return `<span class="spinner small-spin"></span> Tidying up your words…`;
+  return `While Wirl listens, a small bar appears ${where}.`;
+}
+
+function tourDictFeedback() {
+  const text = ui.tour.dictText;
+  if (!text.trim()) return "";
+  const summary = S.apiKey.saved && S.settings.cleanupEnabled ? dictationSummary(text) : "";
+  const noKey = !S.apiKey.saved
+    ? `<div class="muted small" style="margin-top:6px">Without an API key, Wirl types exactly what it heard. You can add your key any time in Setup.</div>`
+    : "";
+  return `<div class="row"><span class="ok-text">Nice, that's dictation!</span><a class="link small" data-act="tour-dict-again">Try again</a></div>${
+    summary ? `<div class="muted" style="margin-top:4px">${esc(summary)}</div>` : ""
+  }${noKey}`;
+}
+
+function tourCleanFeedback() {
+  const key = `<kbd>${esc(S.hotkeys.cleanSelection)}</kbd>`;
+  const again = `<a class="link small" data-act="tour-clean-reset">Start over</a>`;
+  if (ui.tour.clean === "cleaned")
+    return `<div class="row"><span class="ok-text">Tidied!</span>${again}</div><div class="muted" style="margin-top:4px">Changed your mind? Press ${key} again right away to undo.</div>`;
+  if (ui.tour.clean === "undone")
+    return `<div class="row"><span class="ok-text">Back to how it was.</span>${again}</div><div class="muted" style="margin-top:4px">Undo works right after any clean-up, in any app.</div>`;
+  return "";
+}
+
+function tourFooter({ back = true, next = "Next", nextPrimary = true, skip = true } = {}) {
+  return `<div class="tour-footer">
+    ${back ? `<button class="ghost" data-act="tour-back">Back</button>` : "<span></span>"}
+    <div class="row">
+      ${skip ? `<a class="link muted small" data-act="tour-skip">Skip the tour</a>` : ""}
+      <button class="${nextPrimary ? "primary" : ""}" data-act="tour-next">${next}</button>
+    </div>
+  </div>`;
+}
+
+function tourDots() {
+  const i = ui.tour.steps.indexOf(ui.tour.step);
+  return `<div class="tour-dots">${ui.tour.steps.map((_, n) => `<span class="${n === i ? "on" : n < i ? "done" : ""}"></span>`).join("")}</div>`;
+}
+
+function tourWelcome() {
+  const f = iconFile();
+  return `${f ? `<img class="tour-logo" src="assets/icons/${encodeURIComponent(f)}" alt="">` : ""}
+    <h1>Welcome to Wirl</h1>
+    <p class="lead">Wirl helps you write in two ways. Let's try both. It takes about 2 minutes.</p>
+    <div class="tour-two">
+      <div class="card"><div class="tour-icon">${MIC_SVG}</div><h3>Talk, and it types for you</h3>
+        <div class="muted">Speak naturally. Wirl writes it out, tidied up, wherever you're typing.</div></div>
+      <div class="card"><div class="tour-icon">${SPARK_SVG}</div><h3>Tidy up any text</h3>
+        <div class="muted">Select messy text and Wirl cleans it up in place.</div></div>
+    </div>
+    ${tourFooter({ back: false, next: "Let's go", skip: false })}
+    <div class="center"><a class="link muted small" data-act="tour-skip">Skip for now</a></div>`;
+}
+
+function tourReady() {
+  const { m, d, pct } = tourModel();
+  const model = !m
+    ? ""
+    : m.ready
+      ? `<div class="ok-text small">Speech model is ready.</div>`
+      : `<div class="muted small">Getting the speech model ready in the background (${esc(m.sizeLabel)}, one time)… <span data-progress-label="${m.id}">${pct}%</span></div>
+         <div class="progress"><div data-progress="${m.id}" style="width:${pct}%"></div></div>${d.error ? `<div class="error-text">${esc(d.error)}</div>` : ""}`;
+  const done = S.setup.microphone && S.setup.apiKey;
+  return `<h1>First, two quick things</h1>
+    <p class="lead">Wirl needs to hear you, and it uses Claude to tidy your words.</p>
+    <div class="card">
+      ${micItem()}
+      ${checkItem(S.setup.apiKey, "API key", S.setup.apiKey ? "Saved. Only your text is sent to Anthropic; audio stays on this computer." : apiKeyBody(), "")}
+    </div>
+    <div class="card">${model}</div>
+    ${tourFooter({ next: done ? "Continue" : "Continue anyway", nextPrimary: done })}`;
+}
+
+function tourDictate() {
+  const { m, pct } = tourModel();
+  const ins = dictateInstruction(S.hotkeys.dictate, S.settings.holdToTalk);
+  const notReady = m && !m.ready;
+  return `<h1>Try talking</h1>
+    <p class="lead">${ins.before} <kbd>${esc(S.hotkeys.dictate)}</kbd> ${ins.after}</p>
+    <div class="row tour-choice">
+      <span class="muted small grow">How do you like to talk? You can change this later in Hotkeys.</span>
+      <div class="segmented small-seg">
+        <button data-act="tour-hold" data-id="1" class="${S.settings.holdToTalk ? "on" : ""}">Hold the keys</button>
+        <button data-act="tour-hold" data-id="0" class="${S.settings.holdToTalk ? "" : "on"}">Tap on, tap off</button>
+      </div>
+    </div>
+    <div class="card tour-script"><div class="muted small">Read this out loud</div><div class="script">“${esc(DICTATION_SCRIPT)}”</div></div>
+    ${
+      notReady
+        ? `<div class="warning-box">Wirl is still getting its speech model ready (<span data-progress-label="${m.id}">${pct}%</span>). You can try as soon as it's done.</div>`
+        : ""
+    }
+    <textarea id="tour-dict" class="tour-box" placeholder="Your words appear here">${esc(ui.tour.dictText)}</textarea>
+    <div id="tour-status" class="muted small tour-status">${tourStatus()}</div>
+    <div id="tour-feedback">${tourDictFeedback()}</div>
+    ${tourFooter({ nextPrimary: !!ui.tour.dictText.trim() })}`;
+}
+
+function tourClean() {
+  const noKey = !S.apiKey.saved;
+  return `<h1>Now tidy up some text</h1>
+    <p class="lead">Select the text in the box, then press <kbd>${esc(S.hotkeys.cleanSelection)}</kbd>.</p>
+    ${
+      noKey
+        ? `<div class="warning-box">Tidying up uses Claude, so it needs your API key. <a class="link" data-act="tour-to-ready">Add your key</a></div>`
+        : ""
+    }
+    <textarea id="tour-clean" class="tour-box tall">${esc(ui.tour.cleanText)}</textarea>
+    <div style="margin-top:8px"><button class="ghost" data-act="tour-select">Select it for me</button></div>
+    <div id="tour-feedback">${tourCleanFeedback()}</div>
+    ${tourFooter({ nextPrimary: ui.tour.clean !== "messy" })}`;
+}
+
+function tourDone() {
+  return `<h1>You're all set</h1>
+    <p class="lead">Wirl works in any app: email, Word, chat, anywhere you type.</p>
+    <div class="card stack">${shortcutRows()}
+      <div class="muted small">Changed your mind while talking? <kbd>${esc(S.hotkeys.cancel)}</kbd> throws the recording away.</div>
+    </div>
+    <div class="card"><h3>Wirl lives in your system tray</h3>
+      <div class="muted">Look for its icon near the clock. Click it any time to open these settings.</div></div>
+    <h2>When you're ready</h2>
+    <div class="tour-next-steps">
+      <a class="card clickable" data-act="tour-finish" data-id="dictionary"><h3>Add names to your dictionary</h3><div class="muted small">So Wirl always spells them right.</div></a>
+      <a class="card clickable" data-act="tour-finish" data-id="dictionary"><h3>Pair your phone</h3><div class="muted small">Share your dictionary with Wirl on Android.</div></a>
+      <a class="card clickable" data-act="tour-finish" data-id="indicator"><h3>Pick your icon</h3><div class="muted small">25 to choose from.</div></a>
+    </div>
+    <div class="tour-footer"><button class="ghost" data-act="tour-back">Back</button><button class="primary" data-act="tour-finish" data-id="home">Start using Wirl</button></div>`;
+}
+
+function pageTour() {
+  if (!ui.tour) initTour();
+  if (ui.tour.step !== "welcome") tourEnsureModel();
+  const body = { welcome: tourWelcome, ready: tourReady, dictate: tourDictate, clean: tourClean, done: tourDone }[ui.tour.step]();
+  return `<div class="page tour">${tourDots()}${body}</div>`;
+}
+
+function tourMove(delta) {
+  const steps = ui.tour.steps;
+  let i = steps.indexOf(ui.tour.step);
+  // "ready" can be visited from the clean-up step even when it wasn't in the list.
+  if (i < 0) i = steps.indexOf("clean") - (delta > 0 ? 1 : 0);
+  const next = steps[Math.min(steps.length - 1, Math.max(0, i + delta))];
+  ui.tour.step = next;
+  document.activeElement?.blur();
+  main.scrollTop = 0;
+  render();
+}
+
+async function finishTour(target) {
+  ui.tour = null;
+  if (!S.settings.firstRunDone) await invoke("mark_first_run_done");
+  go(target || "home");
+}
+
 // ---------- render ----------
 
 function render() {
@@ -479,13 +713,14 @@ function render() {
     return;
   }
   renderPending = false;
+  document.body.classList.toggle("touring", page === "tour");
   document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.page === page));
   document.getElementById("setup-dot").hidden = attentionCount() === 0;
   const brand = document.getElementById("brand-icon");
   const f = iconFile();
   if (f) brand.src = `assets/icons/${encodeURIComponent(f)}`;
   const scroll = main.scrollTop;
-  const fn = { home: pageHome, dictation: pageDictation, cleanup: pageCleanup, dictionary: pageDictionary, hotkeys: pageHotkeys, indicator: pageIndicator, setup: pageSetup, about: pageAbout }[page];
+  const fn = { home: pageHome, dictation: pageDictation, cleanup: pageCleanup, dictionary: pageDictionary, hotkeys: pageHotkeys, indicator: pageIndicator, setup: pageSetup, about: pageAbout, tour: pageTour }[page];
   main.innerHTML = fn();
   main.scrollTop = scroll;
   afterRender();
@@ -517,6 +752,24 @@ function afterRender() {
   }
   const range = document.getElementById("size-range");
   if (range) range.addEventListener("change", () => save({ pillSize: SIZES[Number(range.value)] }));
+  const tourDict = document.getElementById("tour-dict");
+  if (tourDict) {
+    tourDict.addEventListener("input", () => {
+      ui.tour.dictText = tourDict.value;
+      document.getElementById("tour-feedback").innerHTML = tourDictFeedback();
+      main.querySelector('[data-act="tour-next"]')?.classList.toggle("primary", !!tourDict.value.trim());
+    });
+    if (!ui.tour.dictText) tourDict.focus();
+  }
+  const tourClean = document.getElementById("tour-clean");
+  if (tourClean) {
+    tourClean.addEventListener("input", () => {
+      ui.tour.cleanText = tourClean.value;
+      ui.tour.clean = cleanState(ui.tour.clean, tourClean.value);
+      document.getElementById("tour-feedback").innerHTML = tourCleanFeedback();
+      main.querySelector('[data-act="tour-next"]')?.classList.toggle("primary", ui.tour.clean !== "messy");
+    });
+  }
   const test = document.getElementById("test-box");
   if (test) test.addEventListener("input", () => (ui.testText = test.value));
   main.querySelectorAll("input, textarea").forEach((el) => el.addEventListener("blur", () => setTimeout(flushPending, 50)));
@@ -747,6 +1000,44 @@ async function act(name, el) {
         await invoke("test_dictation");
         break;
       }
+      case "tour-start":
+        ui.tour = null;
+        go("tour");
+        break;
+      case "tour-next":
+        tourMove(1);
+        break;
+      case "tour-back":
+        tourMove(-1);
+        break;
+      case "tour-skip":
+        await finishTour("home");
+        break;
+      case "tour-finish":
+        await finishTour(id);
+        break;
+      case "tour-to-ready":
+        ui.tour.step = "ready";
+        render();
+        break;
+      case "tour-hold":
+        await save({ holdToTalk: id === "1" });
+        break;
+      case "tour-dict-again":
+        ui.tour.dictText = "";
+        render();
+        break;
+      case "tour-select": {
+        const box = document.getElementById("tour-clean");
+        box?.focus();
+        box?.select();
+        break;
+      }
+      case "tour-clean-reset":
+        ui.tour.cleanText = MESSY_TEXT;
+        ui.tour.clean = "messy";
+        render();
+        break;
       case "version":
         ui.devClicks += 1;
         if (ui.devClicks >= 7 && !S.settings.developerOptions) {
@@ -818,4 +1109,6 @@ listen("wirl://download", (e) => {
 });
 
 await load();
-if (!S.settings.firstRunDone) await invoke("mark_first_run_done");
+// On first launch the tour marks the first run done when it's finished or
+// skipped, so closing the window halfway brings it back next time.
+if (!S.settings.firstRunDone && page !== "tour") await invoke("mark_first_run_done");

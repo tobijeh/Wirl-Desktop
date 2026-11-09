@@ -119,7 +119,8 @@ pub fn run() {
                 if s.start_with_windows {
                     let _ = handle.autolaunch().enable();
                 }
-                windows::open_settings(&handle, Some("setup"));
+                // First launch: the welcome tour (it also covers setup).
+                windows::open_settings(&handle, Some("tour"));
             }
             tray::refresh();
             Ok(())

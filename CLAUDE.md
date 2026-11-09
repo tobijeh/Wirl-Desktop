@@ -32,6 +32,7 @@ crates/wirl-core      pure logic (unit tested, builds anywhere)
   pill.rs             pill states, fade timings, placement
   insert.rs           clipboard insert + restore + fallback; clean-selection undo tracker
   pipeline.rs         discard rules, cleanup fallback, timeouts
+  onboarding.rs       usage counts, one-time clean-up tip, shortcut card rule
   settings.rs, models.rs (catalog + resumable verified download), ipc.rs, icons.rs, diagnostics.rs, watchdog.rs
 crates/wirl-whisper   sidecar: JSON lines over stdin/stdout, whisper-rs
 crates/wirl-icons     slice wirl-icons-sheet.png / unzip wirl-icons.zip → ui/assets/icons, generate src-tauri/icons
@@ -47,7 +48,7 @@ src-tauri/src
   updater.rs          check on launch + daily, download, install on restart/quit
   commands.rs         settings-window API
   platform/windows.rs clipboard (all formats), SendInput, UIPI check, monitors, media pause, mic privacy
-ui/                   settings.html/js, pill.html/js, pill-view.js (shared renderer), theme.css
+ui/                   settings.html/js, pill.html/js, pill-view.js (shared renderer), tour-logic.js (welcome tour), theme.css
 ```
 
 ### Dictation flow
@@ -64,9 +65,17 @@ ui/                   settings.html/js, pill.html/js, pill-view.js (shared rende
 
 Copy selection → `UndoTracker::on_hotkey`. Same text as the last cleanup → paste the original (undo). No selection but armed → re-select the pasted text with Shift+Left, compare, undo if unchanged; otherwise collapse the selection and reset. Different text → clean it.
 
+## Welcome tour (onboarding)
+
+- First launch opens the settings window on `#tour` (full window, no sidebar): Welcome → Get ready (only if the microphone or API key is missing; the speech model starts downloading in the background) → Try talking → Tidy up some text → You're all set. `first_run_done` is set only when the tour is finished or skipped, so closing the window halfway brings it back next launch. Anyone can replay it from Setup ("Take the tour") or the Home shortcut card.
+- The practice boxes live in the settings window and use the real hotkeys: dictation and clean-up paste into the focused box exactly as in any other app. Hotkeys shown are the user's own.
+- Content and rules (practice script, messy paragraph, which steps show, the "dropped the um" notes, clean/undo detection) are in `ui/tour-logic.js`, tested by `scripts/test-ui.mjs`. Notes only describe what actually happened.
+- After the tour: `Settings.usage` (`wirl_core::onboarding`) counts successful dictations and clean-ups. Home shows "Your two shortcuts" until each has been used 3 times. After the 2nd dictation, if clean-up has never been used, the pill shows "Inserted" with one tip ("Tip: select text, then <clean hotkey>") once, ever; it waits while status messages are off. Usage survives "Reset to defaults".
+- Tone: warm and brief, plain words.
+
 ## Pill states
 
-Hidden when idle. Recording (red ring, wave, "<Cancel> to cancel"), Processing ("Cleaning up"), Inserted (1 s), Cleaned + "<Clean hotkey> to undo" (3 s), Undone, Copied (amber), Error (amber, short message). The "status messages" toggle hides only the success confirmations.
+Hidden when idle. Recording (red ring, wave, "<Cancel> to cancel"), Processing ("Cleaning up"), Inserted (1 s), Inserted + one-time clean-up tip (6 s), Cleaned + "<Clean hotkey> to undo" (3 s), Undone, Copied (amber), Error (amber, short message). The "status messages" toggle hides only the success confirmations.
 
 ## Tray states
 
@@ -79,6 +88,7 @@ cargo test --workspace --exclude wirl-whisper     # unit tests
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 node scripts/check-ui.mjs                          # UI syntax
+node scripts/test-ui.mjs                           # UI logic (welcome tour)
 cargo run -p wirl-icons -- all                     # icons (ui/assets/icons, else wirl-icons-sheet.png or wirl-icons.zip)
 ./scripts/build-sidecars.ps1                       # Windows sidecars
 npm run tauri dev

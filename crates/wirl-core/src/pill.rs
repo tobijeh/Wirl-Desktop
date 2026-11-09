@@ -49,6 +49,10 @@ pub enum PillState {
     },
     /// Green check, "Undone".
     Undone,
+    /// Green check, "Inserted", plus a one-time tip line (onboarding).
+    InsertedWithTip {
+        tip: String,
+    },
     /// Amber, "Copied, press Ctrl+V".
     Copied,
     /// Amber with a short plain message.
@@ -70,6 +74,7 @@ impl PillState {
             PillState::Cleaned { .. } => Some(3_000),
             PillState::Copied => Some(4_000),
             PillState::Error { .. } => Some(3_500),
+            PillState::InsertedWithTip { .. } => Some(6_000),
         }
     }
 
@@ -85,6 +90,13 @@ impl PillState {
         }
     }
 
+    /// "Inserted" with the one-time clean-up tip.
+    pub fn inserted_with_clean_tip(clean_hotkey: &str) -> Self {
+        PillState::InsertedWithTip {
+            tip: format!("Tip: select text, then {clean_hotkey}"),
+        }
+    }
+
     pub fn error(msg: impl Into<String>) -> Self {
         PillState::Error { message: msg.into() }
     }
@@ -94,7 +106,7 @@ impl PillState {
     pub fn is_status_message(&self) -> bool {
         matches!(
             self,
-            PillState::Inserted | PillState::Cleaned { .. } | PillState::Undone
+            PillState::Inserted | PillState::Cleaned { .. } | PillState::Undone | PillState::InsertedWithTip { .. }
         )
     }
 }
@@ -185,6 +197,15 @@ mod tests {
             PillState::Error { .. }
         ));
         assert_eq!(effective_state(PillState::Inserted, true), PillState::Inserted);
+        let tip = PillState::inserted_with_clean_tip("Ctrl+Alt+C");
+        assert_eq!(
+            tip,
+            PillState::InsertedWithTip {
+                tip: "Tip: select text, then Ctrl+Alt+C".into()
+            }
+        );
+        assert_eq!(tip.auto_hide_ms(), Some(6_000));
+        assert_eq!(effective_state(tip, false), PillState::Hidden);
     }
 
     #[test]

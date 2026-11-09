@@ -508,4 +508,5 @@ pub fn mark_first_run_done() {
     let a = app::get();
     a.settings.write().first_run_done = true;
     a.save_settings();
+    a.notify();
 }

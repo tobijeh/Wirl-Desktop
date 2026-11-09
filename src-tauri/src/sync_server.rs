@@ -82,6 +82,8 @@ fn process(body: &[u8]) -> Result<String, sync::SyncError> {
         Err(e) => {
             if e == sync::SyncError::Unauthorized {
                 a.log_diag(DiagEntry::new(DiagKind::Sync, "Rejected sync request (wrong secret)"));
+                *a.sync_rejected_ms.lock() = Some(now_ms());
+                a.notify();
             }
             return Err(e);
         }
@@ -127,6 +129,9 @@ fn process(body: &[u8]) -> Result<String, sync::SyncError> {
         DiagKind::Sync,
         format!("Synced with {} ({} terms, was {})", out.phone_name, after, before),
     ));
+    *a.sync_rejected_ms.lock() = None;
+    // Refresh the settings window: new phone, "Synced just now", new terms.
+    a.notify();
     if used_pending {
         let _ = tauri::Emitter::emit(&a.handle, "wirl://paired", out.phone_name.clone());
     }

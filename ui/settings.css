@@ -664,3 +664,13 @@ body.touring main {
     grid-template-columns: 1fr;
   }
 }
+
+.spinner-inline {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(140, 124, 247, 0.25);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+  flex: none;
+}

@@ -12,6 +12,7 @@ pub mod icons;
 pub mod insert;
 pub mod ipc;
 pub mod models;
+pub mod onboarding;
 pub mod pill;
 #[cfg(feature = "net")]
 pub mod pipeline;

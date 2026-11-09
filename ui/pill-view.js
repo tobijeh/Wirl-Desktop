@@ -40,6 +40,9 @@ export function renderPill(el, state, opts = {}) {
     case "undone":
       html = `<div class="symbol ok">${CHECK}</div><div class="text">Undone</div>`;
       break;
+    case "insertedWithTip":
+      html = `<div class="symbol ok">${CHECK}</div><div class="text">Inserted<span class="sub">${esc(state.tip)}</span></div>`;
+      break;
     case "cleaned":
       html = `<div class="symbol ok">${CHECK}</div><div class="text">Cleaned<span class="sub">${esc(state.undoHint)}</span></div>`;
       break;

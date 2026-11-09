@@ -14,12 +14,12 @@ It's the desktop version of Wirl for Android. Both apps share a personal diction
 
 1. Open the [latest release](https://github.com/tobijeh/Wirl-Desktop/releases/latest) and download `Wirl_x.y.z_x64-setup.exe`.
 2. Run it. **The first time, Windows may say "Windows protected your PC".** Wirl isn't code-signed (that costs money every year), so Windows doesn't recognise it yet. Click **More info**, then **Run anyway**. You only need to do this once; updates install without this step.
-3. Wirl opens *Setup*:
-   - **API key**: paste your key from the [Anthropic Console](https://console.anthropic.com/settings/keys).
-   - **Speech model**: click *Fix* to download the Fast model (60 MB) once.
-   - **Microphone**: if this is amber, click *Fix* and allow desktop apps to use the microphone.
-   - **Phone pairing** (optional): when Windows Firewall asks, allow Wirl on **Private networks** only.
-4. Click into the test box, press **Test dictation**, say something, press **Stop**.
+3. Wirl opens a short **welcome tour** (about 2 minutes):
+   - It explains the two things Wirl does: **talk, and it types for you**, and **select messy text, and it tidies it up**.
+   - If something's missing, it asks for it: your **API key** from the [Anthropic Console](https://console.anthropic.com/settings/keys), and **microphone** access. The speech model (60 MB) downloads in the background.
+   - You **try talking** in a practice box, then **tidy up** a messy paragraph, using the real shortcuts.
+   - You can skip it, and take it again any time from *Setup › Take the tour*.
+4. **Phone sync** (optional): *Dictionary › Pair with phone*. When Windows Firewall asks, allow Wirl on **Private networks** only.
 
 Then press **Ctrl+Alt+Space** in any app. Hold it while you talk and let go to insert, or tap it once to start and again to stop. **Esc** cancels.
 Select text and press **Ctrl+Alt+C** to clean it up; press it again straight away to undo.

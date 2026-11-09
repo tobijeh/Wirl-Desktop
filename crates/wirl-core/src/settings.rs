@@ -2,6 +2,7 @@
 //! stored separately so "Reset to defaults" never touches them.
 
 use crate::hotkey::{default_for, Action, Hotkey};
+use crate::onboarding::Usage;
 use crate::pill::{PillPosition, PillSize};
 use serde::{Deserialize, Serialize};
 
@@ -90,6 +91,10 @@ pub struct Settings {
 
     // Developer
     pub developer_options: bool,
+
+    /// How often dictation and clean-up have been used (onboarding tips).
+    /// Kept by "Reset to defaults".
+    pub usage: Usage,
 }
 
 impl Default for Settings {
@@ -111,16 +116,18 @@ impl Default for Settings {
             chime: true,
             status_messages: true,
             developer_options: false,
+            usage: Usage::default(),
         }
     }
 }
 
 impl Settings {
-    /// "Reset to defaults" keeps first-run state; the API key, dictionary and
-    /// pairings live elsewhere and are untouched.
+    /// "Reset to defaults" keeps first-run state and usage counts; the API
+    /// key, dictionary and pairings live elsewhere and are untouched.
     pub fn reset_to_defaults(&self) -> Settings {
         Settings {
             first_run_done: self.first_run_done,
+            usage: self.usage.clone(),
             ..Settings::default()
         }
     }
@@ -190,14 +197,16 @@ mod tests {
 
     #[test]
     fn reset_keeps_first_run_flag() {
-        let s = Settings {
+        let mut s = Settings {
             first_run_done: true,
             chime: false,
             style_notes: "x".into(),
             ..Default::default()
         };
+        s.usage.record_cleanup();
         let r = s.reset_to_defaults();
         assert!(r.first_run_done);
+        assert_eq!(r.usage.cleanups, 1, "tips don't come back after a reset");
         assert!(r.chime);
         assert!(r.style_notes.is_empty());
     }

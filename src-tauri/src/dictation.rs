@@ -389,7 +389,12 @@ async fn run_session(
                 .unwrap_or_else(|e| InsertOutcome::Failed(e.to_string()));
             diag.push_stage("Insert", t.elapsed().as_millis() as u64);
             report_insert(&mut diag, &outcome);
+            let pasted = matches!(outcome, InsertOutcome::Pasted { .. });
+            let tip = pasted && record_dictation(&a);
             match (outcome, warning) {
+                (InsertOutcome::Pasted { .. }, None) if tip => pill::set(PillState::inserted_with_clean_tip(
+                    &s.hotkeys.clean_selection.to_string(),
+                )),
                 (InsertOutcome::Pasted { .. }, None) => pill::set(PillState::Inserted),
                 (InsertOutcome::Pasted { .. }, Some(w)) => show_error(w),
                 (InsertOutcome::CopiedOnly { .. }, _) => pill::set(PillState::Copied),
@@ -402,6 +407,25 @@ async fn run_session(
     }
     a.log_diag(diag);
     end_session(&a, session);
+}
+
+/// Counts a successful dictation for onboarding. Returns true if the
+/// one-time "try clean-up" tip should show now.
+fn record_dictation(a: &App) -> bool {
+    let tip = {
+        let mut s = a.settings.write();
+        let can_show = s.status_messages;
+        s.usage.record_dictation(can_show)
+    };
+    a.save_settings();
+    a.notify();
+    tip
+}
+
+fn record_cleanup(a: &App) {
+    a.settings.write().usage.record_cleanup();
+    a.save_settings();
+    a.notify();
 }
 
 fn report_insert(diag: &mut DiagEntry, outcome: &InsertOutcome) {
@@ -523,6 +547,7 @@ async fn clean_selection(a: Arc<App>, session: u64) {
                     match outcome {
                         InsertOutcome::Pasted { .. } => {
                             a.undo.lock().record(&original, &cleaned);
+                            record_cleanup(&a);
                             pill::set(PillState::cleaned(&s.hotkeys.clean_selection.to_string()));
                         }
                         InsertOutcome::CopiedOnly { .. } => pill::set(PillState::Copied),

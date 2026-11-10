@@ -21,12 +21,13 @@ Status per platform.
 | | "Copied, press Ctrl+V" fallback when paste is blocked | ✅ logic / 🟢 Windows | ❔ |
 | | Pause media during dictation (Windows media controls) | 🟢 | ❔ |
 | | Start/stop chime | 🟢 | ❔ |
-| **Models** | Fast (base.en q5_1), Accurate (small.en), Multilingual (base) | ✅ | ❔ |
-| | On-demand download from Hugging Face with progress, resume, SHA-256 check | ✅ | ❔ |
+| **Models** | One Speech model list, one model per language: English · Fast (Whisper base.en q5_1), English · Accurate (Whisper small.en), Cantonese (粵語), Mandarin (普通话). The model decides the language and the cleanup mode; no separate language setting | ✅ | 🔵 |
+| | Multilingual removed; settings migration (version 2) moves its users to English · Fast and deletes its file | ✅ | 🔵 |
+| | On-demand download with size, progress, Cancel (keeps the partial file, Resume continues), SHA-256 check, Delete | ✅ | 🔵 |
+| | Amber "not downloaded yet" note on the chosen model's row | ✅ | 🔵 |
 | | Active model kept loaded | 🟢 | ❔ |
-| | Language picker | 🟢 | ❔ |
-| | **Cantonese (粵語)**: SenseVoice through sherpa-onnx in its own sidecar, language `yue`, Cantonese mixed with English (docs/cantonese.md) | ✅ logic, verified on Linux / 🟢 Windows | 🔵 |
-| | Cantonese model downloaded in the app (166 MB, SHA-256, unpacked), "download first" message | ✅ | 🔵 |
+| | **Cantonese (粵語)** and **Mandarin (普通话)**: SenseVoice through sherpa-onnx 2.0.1 in its own sidecar, language `yue` / `zh`, mixed with English (docs/cantonese.md, docs/mandarin.md) | ✅ logic, verified on Linux / 🟢 Windows | 🔵 |
+| | One SenseVoice download (166 MB, size + SHA-256, unpacked with sizes checked) serves both; Delete removes both after a warning | ✅ | 🔵 |
 | **AI cleanup** | Claude Haiku 5.5, thinking off, exact built-in prompt | ✅ | 🔵 same app family |
 | | Personal style notes | ✅ | ❔ |
 | | Only plausibly matching dictionary entries sent | ✅ | ❔ |
@@ -34,8 +35,8 @@ Status per platform.
 | | Raw-text fallback with plain reason | ✅ | ❔ |
 | | Line breaks and lists preserved | ✅ | ❔ |
 | | Own API key, stored in the OS credential store | 🟢 Windows Credential Manager | ❔ |
-| | Cantonese mode block added to the prompt (same text as Android) | ✅ | 🔵 |
-| | Quality test set (31 cases incl. Cantonese, manual) | ✅ | ❔ |
+| | Cantonese and Mandarin mode blocks added to the prompt (same text as Android, tests check docs match) | ✅ | 🔵 |
+| | Quality test set (38 cases incl. 6 Cantonese and 6 Mandarin, manual) | ✅ | 🔵 |
 | **Clean up selection** | Copy → clean → paste back | 🟢 | ⬜ |
 | | Press again to undo while unchanged; editing resets | ✅ logic / 🟢 Windows | ⬜ |
 | **Hotkeys** | Dictate (Ctrl+Alt+Space), Cancel (Esc, recording only), Clean up (Ctrl+Alt+C) | 🟢 | ⬜ |

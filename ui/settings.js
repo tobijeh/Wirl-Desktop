@@ -35,6 +35,8 @@ const ui = {
   testText: "",
   tour: null,
   confirmDisconnect: false,
+  /** Model whose Delete is waiting for a second click. */
+  confirmDeleteModel: null,
 };
 
 // ---------- helpers ----------
@@ -185,54 +187,54 @@ function modelCard(m) {
   const s = S.settings;
   const selected = s.model === m.id;
   const d = m.download || {};
+  const pct = d.total ? Math.round((d.done / d.total) * 100) : 0;
+  const partialPct = m.partial && m.total ? Math.round((m.partial / m.total) * 100) : 0;
+  const confirming = ui.confirmDeleteModel === m.id;
   let right;
-  if (m.ready) right = `<span class="pill-tag ok">Ready</span>`;
+  if (m.ready) right = `<span class="pill-tag ok">Ready</span><button data-act="delete-model" data-id="${m.id}">Delete</button>`;
   else if (d.unpacking) right = "";
   else if (d.active) right = `<button data-act="cancel-download" data-id="${m.id}">Cancel</button>`;
-  else right = `<button data-act="download" data-id="${m.id}">Download · ${esc(m.sizeLabel)}</button>`;
-  const pct = d.total ? Math.round((d.done / d.total) * 100) : 0;
+  else if (m.partial) right = `<button data-act="download" data-id="${m.id}">Resume download</button>`;
+  else right = `<button data-act="download" data-id="${m.id}">Download (${esc(m.sizeLabel)})</button>`;
   // Picked but not downloaded yet (or the download stopped): say so plainly.
   const needs =
     selected && !m.ready && !d.active
-      ? `<div class="warning-box" style="margin-top:12px">Download this model to dictate with it (${esc(m.sizeLabel)}, one time). Until then, dictation won't work.</div>`
+      ? `<div class="warning-box" style="margin-top:12px">Not downloaded yet, so dictation won't work with this model. Click ${m.partial ? "Resume download" : `Download (${esc(m.sizeLabel)})`} to use it.</div>`
       : selected && !m.ready
         ? `<div class="muted small" style="margin-top:6px">Dictation works as soon as the download finishes.</div>`
         : "";
+  const deleteText = m.shared
+    ? "Delete the Cantonese and Mandarin model? Both use the same files. You can download it again later."
+    : `Delete the ${esc(m.name)} model? You can download it again later.`;
   const label = d.unpacking ? "Unpacking…" : `${pct}%`;
   return `<div class="card clickable ${selected ? "selected" : ""}" data-act="select-model" data-id="${m.id}">
     <div class="row">
       <div class="grow"><h3>${esc(m.name)}${selected ? ` <span class="muted small">· selected</span>` : ""}</h3>
-        <div class="muted">${esc(m.description)}</div></div>
-      ${right}
+        <div class="muted">${esc(m.description)}</div>
+        <div class="muted small" style="margin-top:4px">${esc(m.sizeNote)}</div></div>
+      <div class="row" style="gap:8px;flex:none">${right}</div>
     </div>
-    ${d.active ? `<div class="progress"><div data-progress="${m.id}" style="width:${d.unpacking ? 100 : pct}%"></div></div><div class="muted small" data-progress-label="${m.id}" style="margin-top:6px">${label}</div>` : ""}
+    ${d.active ? `<div class="progress"><div data-progress="${esc(m.file)}" style="width:${d.unpacking ? 100 : pct}%"></div></div><div class="muted small" data-progress-label="${esc(m.file)}" style="margin-top:6px">${label}</div>` : ""}
+    ${!d.active && !m.ready && m.partial ? `<div class="muted small" style="margin-top:6px">Partly downloaded (${partialPct}%). Resume to finish.</div>` : ""}
     ${d.error ? `<div class="error-text">${esc(d.error)}</div>` : ""}
+    ${
+      confirming
+        ? `<div class="warning-box row" style="margin-top:12px"><div class="grow">${deleteText}</div>
+            <button class="warn" data-act="delete-model-yes" data-id="${m.id}">Delete</button>
+            <button data-act="delete-model-no" data-id="${m.id}">Keep</button></div>`
+        : ""
+    }
     ${needs}
   </div>`;
 }
 
 function pageDictation() {
   const s = S.settings;
-  const model = S.models.find((m) => m.id === s.model);
-  const englishOnly = model?.englishOnly;
-  const fixed = model?.fixedLanguage;
-  const cantonese = fixed && !englishOnly;
   return `<div class="page">
     <h1>Dictation</h1>
-    <p class="lead">Speech is turned into text on this computer. Models download once when you pick them.</p>
+    <p class="lead">Speech is turned into text on this computer. Pick the model for the language you speak; it downloads once.</p>
     <h2>Speech model</h2>
     ${S.models.map(modelCard).join("")}
-    <h2>Language</h2>
-    <div class="card">
-      ${
-        cantonese
-          ? `<div class="muted">Cantonese, with English words kept in English. Text is written in traditional characters.</div>`
-          : `<select data-setting="language" ${englishOnly ? "disabled" : ""}>
-        ${S.languages.map(([c, l]) => `<option value="${c}" ${(englishOnly ? "en" : s.language) === c ? "selected" : ""}>${esc(l)}</option>`).join("")}
-      </select>`
-      }
-      ${englishOnly ? `<div class="muted small" style="margin-top:8px">This model understands English only. Choose Multilingual for other languages.</div>` : ""}
-    </div>
     <div class="card row">
       <div class="grow"><h3>Pause media while dictating</h3><div class="muted">Music and videos pause while you talk and resume after.</div></div>
       ${switchHtml("pauseMedia", s.pauseMedia)}
@@ -483,7 +485,7 @@ function pageSetup() {
         st.model
           ? `${esc(model.name)} model is ready.`
           : d.active
-            ? `Downloading ${esc(model.name)}… ${pct}%<div class="progress"><div data-progress="${model.id}" style="width:${pct}%"></div></div>`
+            ? `Downloading ${esc(model.name)}… ${pct}%<div class="progress"><div data-progress="${esc(model.file)}" style="width:${pct}%"></div></div>`
             : `The ${esc(model.name)} model (${esc(model.sizeLabel)}) needs to download once.${d.error ? `<div class="error-text">${esc(d.error)}</div>` : ""}`,
         d.active ? "" : `<button class="warn" data-act="download" data-id="${model.id}">Fix</button>`,
       )}
@@ -645,8 +647,8 @@ function tourReady() {
     ? ""
     : m.ready
       ? `<div class="ok-text small">Speech model is ready.</div>`
-      : `<div class="muted small">Getting the speech model ready in the background (${esc(m.sizeLabel)}, one time)… <span data-progress-label="${m.id}">${pct}%</span></div>
-         <div class="progress"><div data-progress="${m.id}" style="width:${pct}%"></div></div>${d.error ? `<div class="error-text">${esc(d.error)}</div>` : ""}`;
+      : `<div class="muted small">Getting the speech model ready in the background (${esc(m.sizeLabel)}, one time)… <span data-progress-label="${esc(m.file)}">${pct}%</span></div>
+         <div class="progress"><div data-progress="${esc(m.file)}" style="width:${pct}%"></div></div>${d.error ? `<div class="error-text">${esc(d.error)}</div>` : ""}`;
   const done = S.setup.microphone && S.setup.apiKey;
   return `<h1>First, two quick things</h1>
     <p class="lead">Wirl needs to hear you, and it uses Claude to tidy your words.</p>
@@ -674,7 +676,7 @@ function tourDictate() {
     <div class="card tour-script"><div class="muted small">Read this out loud</div><div class="script">“${esc(DICTATION_SCRIPT)}”</div></div>
     ${
       notReady
-        ? `<div class="warning-box">Wirl is still getting its speech model ready (<span data-progress-label="${m.id}">${pct}%</span>). You can try as soon as it's done.</div>`
+        ? `<div class="warning-box">Wirl is still getting its speech model ready (<span data-progress-label="${esc(m.file)}">${pct}%</span>). You can try as soon as it's done.</div>`
         : ""
     }
     <textarea id="tour-dict" class="tour-box" placeholder="Your words appear here">${esc(ui.tour.dictText)}</textarea>
@@ -856,6 +858,7 @@ function go(p) {
   page = p;
   ui.confirmReset = false;
   ui.confirmDisconnect = false;
+  ui.confirmDeleteModel = null;
   if (p === "dictionary") invoke("sync_now").catch(() => {});
   history.replaceState(null, "", `#${p}`);
   main.scrollTop = 0;
@@ -924,6 +927,18 @@ async function act(name, el) {
         break;
       case "cancel-download":
         await invoke("cancel_download", { id });
+        break;
+      case "delete-model":
+        ui.confirmDeleteModel = id;
+        render();
+        break;
+      case "delete-model-no":
+        ui.confirmDeleteModel = null;
+        render();
+        break;
+      case "delete-model-yes":
+        ui.confirmDeleteModel = null;
+        await invoke("delete_model", { id });
         break;
       case "position":
         await save({ pillPosition: id });
@@ -1148,13 +1163,15 @@ listen("wirl://paired", (e) => {
   load();
 });
 listen("wirl://download", (e) => {
-  const { id, done, total } = e.payload;
+  // Downloads are per file: Cantonese and Mandarin share one.
+  const { file, done, total } = e.payload;
   const pct = total ? Math.round((done / total) * 100) : 0;
-  const m = S?.models.find((x) => x.id === id);
-  // The Cantonese model is unpacked after downloading; the state update says so.
-  if (m) m.download = { ...(m.download || {}), done, total, active: done < total || !!m.download?.unpacking };
-  document.querySelectorAll(`[data-progress="${id}"]`).forEach((b) => (b.style.width = `${pct}%`));
-  document.querySelectorAll(`[data-progress-label="${id}"]`).forEach((b) => (b.textContent = `${pct}%`));
+  for (const m of S?.models.filter((x) => x.file === file) || []) {
+    // The SenseVoice model is unpacked after downloading; the state update says so.
+    m.download = { ...(m.download || {}), done, total, active: done < total || !!m.download?.unpacking };
+  }
+  document.querySelectorAll(`[data-progress="${file}"]`).forEach((b) => (b.style.width = `${pct}%`));
+  document.querySelectorAll(`[data-progress-label="${file}"]`).forEach((b) => (b.textContent = `${pct}%`));
 });
 
 await load();

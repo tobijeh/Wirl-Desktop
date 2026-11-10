@@ -125,8 +125,9 @@ async fn start() -> Result<(), String> {
     let sc = a.sidecar.clone();
     let mp = model_path.to_string_lossy().to_string();
     let engine = models::info(s.model).engine;
+    let lang = models::language_code(s.model);
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = sc.load(engine, &mp).await {
+        if let Err(e) = sc.load(engine, &mp, lang).await {
             log::error!("model load: {e}");
         }
     });
@@ -236,7 +237,8 @@ async fn run_session(
     let terms: Vec<String> = a.dict.lock().visible().iter().map(|e| e.term.clone()).collect();
     let term_refs: Vec<&str> = terms.iter().map(|t| t.as_str()).collect();
     let prompt = initial_prompt(&term_refs);
-    let language = models::effective_language(s.model, &s.language);
+    // The model decides the language ("en", "yue" or "zh").
+    let language = models::language_code(s.model).to_string();
     let (chunk_tx, chunk_rx) = mpsc::unbounded_channel::<Chunk>();
     let worker = tauri::async_runtime::spawn(transcribe_worker(a.clone(), chunk_rx, language, prompt));
     let mut last_level = Instant::now();
@@ -348,15 +350,12 @@ async fn run_session(
     let cleanup = if s.cleanup_enabled {
         diag.thinking = Some(false);
         let key = a.api_key.read().clone().unwrap_or_default();
-        // Cantonese mode when the Cantonese model produced the transcript.
-        let mode = match model.engine {
-            Engine::SenseVoice => PromptMode::Cantonese,
-            Engine::Whisper => PromptMode::Standard,
-        };
+        // The model decides the cleanup mode (standard, Cantonese, Mandarin).
+        let mode = model.language.prompt_mode();
         let entries_owned: Vec<_> = {
             let d = a.dict.lock();
             match mode {
-                PromptMode::Cantonese => d.matching_cantonese(&raw),
+                PromptMode::Cantonese | PromptMode::Mandarin => d.matching_chinese(&raw),
                 PromptMode::Standard => d.matching(&raw),
             }
             .into_iter()

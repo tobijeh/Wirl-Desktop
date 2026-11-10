@@ -168,10 +168,10 @@ impl Dictionary {
     }
 
     /// Like [`matching`](Self::matching), for a transcript from the Cantonese
-    /// model. That model writes simplified characters while people type their
-    /// entries in traditional ones, so entries written in Chinese characters
-    /// are always included (Claude checks whether they apply).
-    pub fn matching_cantonese(&self, transcript: &str) -> Vec<&Entry> {
+    /// or Mandarin model. That model writes simplified characters while people
+    /// often type entries in traditional ones, so entries written in Chinese
+    /// characters are always included (Claude checks whether they apply).
+    pub fn matching_chinese(&self, transcript: &str) -> Vec<&Entry> {
         let words = tokenize(transcript);
         let lower = transcript.to_lowercase();
         self.visible()
@@ -501,7 +501,7 @@ mod tests {
         let raw = "听日同 SALAD 去饮茶";
         let terms = |v: Vec<&Entry>| v.iter().map(|e| e.term.clone()).collect::<Vec<_>>();
         assert_eq!(terms(d.matching(raw)), ["Sela"]);
-        let mut c = terms(d.matching_cantonese(raw));
+        let mut c = terms(d.matching_chinese(raw));
         c.sort();
         assert_eq!(c, ["Sela", "陳太"]);
         // Chinese text alone never matches Latin entries by sound.

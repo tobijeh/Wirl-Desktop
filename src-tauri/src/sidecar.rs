@@ -39,6 +39,8 @@ struct Proc {
 pub struct SidecarStatus {
     pub running: bool,
     pub model_path: Option<String>,
+    /// Language the loaded model runs with (SenseVoice: "yue" or "zh").
+    pub language: Option<String>,
     pub gpu: bool,
     pub cpu_only: bool,
     pub restarts: u32,
@@ -55,7 +57,7 @@ pub struct Sidecar {
     cpu_only: AtomicBool,
     /// Engine of the running process (or the one to start next).
     engine: Mutex<Engine>,
-    want_model: Mutex<Option<(Engine, String)>>,
+    want_model: Mutex<Option<(Engine, String, &'static str)>>,
     status: Arc<Mutex<SidecarStatus>>,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     on_restart: Mutex<Option<RestartHook>>,
@@ -116,9 +118,18 @@ impl Sidecar {
         s
     }
 
+    /// Whether these model files are loaded (with any language).
     pub fn is_loaded(&self, path: &str) -> bool {
         let s = self.status.lock();
         s.running && s.model_path.as_deref() == Some(path)
+    }
+
+    /// Whether these model files are loaded with this language. Cantonese
+    /// and Mandarin share files; switching between them reloads with the
+    /// other language.
+    fn is_loaded_as(&self, path: &str, language: &str) -> bool {
+        let s = self.status.lock();
+        s.running && s.model_path.as_deref() == Some(path) && s.language.as_deref() == Some(language)
     }
 
     async fn spawn(self: &Arc<Self>) -> Result<(), String> {
@@ -144,6 +155,7 @@ impl Sidecar {
             let mut st = self.status.lock();
             st.running = true;
             st.model_path = None;
+            st.language = None;
             st.gpu = false;
         }
         // stderr tail for crash reports.
@@ -222,6 +234,7 @@ impl Sidecar {
             let mut st = self.status.lock();
             st.running = false;
             st.model_path = None;
+            st.language = None;
         }
         for (_, tx) in self.pending.lock().drain() {
             let _ = tx.send(Err("Speech engine stopped".into()));
@@ -255,8 +268,8 @@ impl Sidecar {
         Box::pin(async move {
             tokio::time::sleep(delay).await;
             let model = self.want_model.lock().clone();
-            if let Some((engine, model)) = model {
-                if let Err(e) = self.load(engine, &model).await {
+            if let Some((engine, model, language)) = model {
+                if let Err(e) = self.load(engine, &model, language).await {
                     log::error!("reload after restart failed: {e}");
                 }
             }
@@ -283,9 +296,16 @@ impl Sidecar {
         }
         self.status.lock().running = false;
         self.status.lock().model_path = None;
+        self.status.lock().language = None;
         for (_, tx) in self.pending.lock().drain() {
             let _ = tx.send(Err("Speech engine reset".into()));
         }
+    }
+
+    /// Stops the engine and forgets the model (its files are being deleted).
+    pub async fn unload(&self) {
+        *self.want_model.lock() = None;
+        self.kill().await;
     }
 
     pub async fn shutdown(&self) {
@@ -303,8 +323,13 @@ impl Sidecar {
 
     /// Loads a model and keeps it loaded, starting the right engine for it.
     /// Whisper falls back to the CPU build if the GPU build fails to load.
-    pub async fn load(self: &Arc<Self>, engine: Engine, model_path: &str) -> Result<bool, String> {
-        *self.want_model.lock() = Some((engine, model_path.to_string()));
+    pub async fn load(
+        self: &Arc<Self>,
+        engine: Engine,
+        model_path: &str,
+        language: &'static str,
+    ) -> Result<bool, String> {
+        *self.want_model.lock() = Some((engine, model_path.to_string(), language));
         let switching = {
             let mut e = self.engine.lock();
             let switching = *e != engine;
@@ -316,37 +341,41 @@ impl Sidecar {
             log::info!("switching speech engine to {engine:?}");
             self.kill().await;
         }
-        if self.is_loaded(model_path) {
+        if self.is_loaded_as(model_path, language) {
             return Ok(self.status.lock().gpu);
         }
         let whisper_gpu = engine == Engine::Whisper && !self.cpu_only.load(Ordering::Relaxed);
-        let result = self.load_once(model_path, whisper_gpu).await;
+        let result = self.load_once(model_path, whisper_gpu, language).await;
         match result {
             Ok(gpu) => Ok(gpu),
             Err(e) if whisper_gpu => {
                 log::warn!("GPU speech engine failed ({e}); switching to CPU");
                 self.cpu_only.store(true, Ordering::Relaxed);
                 self.kill().await;
-                self.load_once(model_path, false).await
+                self.load_once(model_path, false, language).await
             }
             Err(e) => Err(e),
         }
     }
 
-    async fn load_once(self: &Arc<Self>, model_path: &str, use_gpu: bool) -> Result<bool, String> {
+    async fn load_once(self: &Arc<Self>, model_path: &str, use_gpu: bool, language: &str) -> Result<bool, String> {
         self.ensure_running().await?;
         let (tx, rx) = oneshot::channel();
         *self.load_waiter.lock() = Some(tx);
         self.write(&Request::Load {
             model_path: model_path.into(),
             use_gpu,
+            language: language.into(),
         })
         .await?;
         let timeout = Duration::from_millis(wirl_core::pipeline::MODEL_LOAD_TIMEOUT_MS);
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(Ok((gpu, ms)))) => {
-                log::info!("model loaded in {ms} ms (gpu: {gpu})");
-                self.status.lock().last_error = None;
+                log::info!("model loaded in {ms} ms (gpu: {gpu}, language: {language})");
+                let mut st = self.status.lock();
+                st.last_error = None;
+                st.language = Some(language.to_string());
+                drop(st);
                 Ok(gpu)
             }
             Ok(Ok(Err(e))) => Err(e),
@@ -368,9 +397,9 @@ impl Sidecar {
         timeout: Duration,
     ) -> Result<(String, u64), String> {
         let want = self.want_model.lock().clone();
-        if let Some((engine, m)) = want {
-            if !self.is_loaded(&m) {
-                self.load(engine, &m).await?;
+        if let Some((engine, m, lang)) = want {
+            if !self.is_loaded_as(&m, lang) {
+                self.load(engine, &m, lang).await?;
             }
         } else {
             return Err("No speech model selected".into());

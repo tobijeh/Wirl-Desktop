@@ -9,10 +9,11 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
+use wirl_core::diagnostics::{DiagEntry, DiagKind};
 use wirl_core::dictionary::split_sounds_like;
 use wirl_core::hotkey::{default_for, find_conflict, Action, Hotkey, RecordResult, ShortcutRecorder};
 use wirl_core::models::{self, human_size, MODELS};
-use wirl_core::settings::{ModelId, Settings, LANGUAGES};
+use wirl_core::settings::{ModelId, Settings};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -33,12 +34,17 @@ pub fn get_state() -> Value {
     let models: Vec<Value> = MODELS
         .iter()
         .map(|m| {
-            let d = downloads.get(&m.id).cloned().unwrap_or_default();
+            let d = downloads.get(m.file).cloned().unwrap_or_default();
+            let shared = !models::sharing_files(m.id).is_empty();
+            let size = human_size(m.size);
             json!({
-                "id": m.id, "name": m.name, "description": m.description,
-                "sizeLabel": human_size(m.size), "ready": a.model_ready(m.id),
-                "download": d, "englishOnly": m.english_only,
-                "fixedLanguage": models::fixed_language(m.id),
+                "id": m.id, "name": m.name, "description": m.description, "file": m.file,
+                "sizeLabel": size,
+                "sizeNote": if shared { format!("{size}, one download for Cantonese and Mandarin") } else { size.clone() },
+                "shared": shared,
+                "ready": a.model_ready(m.id),
+                "partial": a.model_partial(m.id), "total": m.size,
+                "download": d,
             })
         })
         .collect();
@@ -80,8 +86,7 @@ pub fn get_state() -> Value {
             "paired": !phones.is_empty(),
         },
         "models": models,
-        "modelSummary": models::summary(s.model, &s.language),
-        "languages": LANGUAGES,
+        "modelSummary": models::info(s.model).name,
         "dictionary": { "count": count, "entries": entries },
         "phones": phones,
         "hotkeys": {
@@ -158,9 +163,10 @@ pub fn ensure_model(id: ModelId) {
     if a.model_ready(id) {
         let path = a.model_path(id).to_string_lossy().to_string();
         let engine = models::info(id).engine;
+        let language = models::language_code(id);
         let sc = a.sidecar.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(e) = sc.load(engine, &path).await {
+            if let Err(e) = sc.load(engine, &path, language).await {
                 log::error!("load model: {e}");
             }
         });
@@ -169,16 +175,19 @@ pub fn ensure_model(id: ModelId) {
     }
 }
 
+/// Downloads a model's files. Models that share files (Cantonese and
+/// Mandarin) share the download: starting it from either starts it for both.
 #[tauri::command]
 pub fn download_model(id: ModelId) -> CmdResult<()> {
     let a = app::get().clone();
-    if a.downloads.lock().get(&id).map(|d| d.active).unwrap_or(false) {
+    let file = models::info(id).file;
+    if a.downloads.lock().get(file).map(|d| d.active).unwrap_or(false) {
         return Ok(());
     }
     let cancel = Arc::new(AtomicBool::new(false));
-    a.download_cancel.lock().insert(id, cancel.clone());
+    a.download_cancel.lock().insert(file, cancel.clone());
     a.downloads.lock().insert(
-        id,
+        file,
         DownloadState {
             active: true,
             ..Default::default()
@@ -191,7 +200,7 @@ pub fn download_model(id: ModelId) -> CmdResult<()> {
         let a3 = a.clone();
         let mut last_emit = std::time::Instant::now();
         let unpacking = move || {
-            a3.downloads.lock().entry(id).or_default().unpacking = true;
+            a3.downloads.lock().entry(file).or_default().unpacking = true;
             a3.notify();
         };
         let r = models::download::download(
@@ -202,7 +211,7 @@ pub fn download_model(id: ModelId) -> CmdResult<()> {
             move |done, total| {
                 {
                     let mut d = a2.downloads.lock();
-                    let e = d.entry(id).or_default();
+                    let e = d.entry(file).or_default();
                     e.done = done;
                     e.total = total;
                 }
@@ -210,7 +219,7 @@ pub fn download_model(id: ModelId) -> CmdResult<()> {
                     last_emit = std::time::Instant::now();
                     let _ = a2
                         .handle
-                        .emit("wirl://download", json!({ "id": id, "done": done, "total": total }));
+                        .emit("wirl://download", json!({ "file": file, "done": done, "total": total }));
                 }
             },
             unpacking,
@@ -218,15 +227,22 @@ pub fn download_model(id: ModelId) -> CmdResult<()> {
         .await;
         {
             let mut d = a.downloads.lock();
-            let e = d.entry(id).or_default();
+            let e = d.entry(file).or_default();
             e.active = false;
             e.unpacking = false;
-            e.error = r.as_ref().err().map(|e| e.to_string());
+            // Cancel keeps the partial file; the row offers to resume.
+            e.error = match &r {
+                Err(models::download::DownloadError::Cancelled) | Ok(_) => None,
+                Err(e) => Some(e.to_string()),
+            };
         }
+        a.notify();
         match r {
             Ok(_) => {
-                if a.settings().model == id {
-                    ensure_model(id);
+                // The chosen model may be this one or one sharing its files.
+                let chosen = a.settings().model;
+                if models::info(chosen).file == file {
+                    ensure_model(chosen);
                 }
             }
             Err(e) => log::warn!("download {}: {e}", info.file),
@@ -236,11 +252,54 @@ pub fn download_model(id: ModelId) -> CmdResult<()> {
     Ok(())
 }
 
+/// Stops a download. The partial file stays, so Download resumes it.
 #[tauri::command]
 pub fn cancel_download(id: ModelId) {
-    if let Some(c) = app::get().download_cancel.lock().get(&id) {
+    if let Some(c) = app::get().download_cancel.lock().get(models::info(id).file) {
         c.store(true, Ordering::Relaxed);
     }
+}
+
+/// Deletes a model's files (and any partial download). For Cantonese and
+/// Mandarin this removes both, since they share the files; the settings
+/// window asks first and says so.
+#[tauri::command]
+pub async fn delete_model(id: ModelId) -> CmdResult<()> {
+    let a = app::get().clone();
+    let info = models::info(id);
+    if a.downloads.lock().get(info.file).map(|d| d.active).unwrap_or(false) {
+        cancel_download(id);
+        // Let the download notice the cancel before its file goes.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+    // Stop the engine if it has these files loaded.
+    let path = a.model_path(id);
+    if a.sidecar.is_loaded(&path.to_string_lossy()) {
+        a.sidecar.unload().await;
+    }
+    let part = models::download::part_path(&a.paths.models, info);
+    let unpack = a.paths.models.join(format!("{}.unpack", info.file));
+    tauri::async_runtime::spawn_blocking(move || -> std::io::Result<()> {
+        if path.is_dir() {
+            std::fs::remove_dir_all(&path)?;
+        } else if path.exists() {
+            std::fs::remove_file(&path)?;
+        }
+        let _ = std::fs::remove_file(&part);
+        let _ = std::fs::remove_dir_all(&unpack);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("Couldn't delete the model: {e}"))?;
+    a.downloads.lock().remove(info.file);
+    a.log_diag(DiagEntry::new(
+        DiagKind::Info,
+        format!("Deleted the {} model", info.name),
+    ));
+    a.notify();
+    tray::refresh();
+    Ok(())
 }
 
 #[tauri::command]

@@ -2,7 +2,7 @@
 
 Wirl lives in your system tray. Press a hotkey in any text box, talk, and Wirl types what you meant:
 
-1. **Whisper** turns your speech into text **on your computer** (whisper.cpp, GPU via Vulkan when available). For Cantonese, pick the **Cantonese (粵語)** model: it uses SenseVoice (sherpa-onnx), also on your computer. See [docs/cantonese.md](docs/cantonese.md).
+1. **Whisper** turns your speech into text **on your computer** (whisper.cpp, GPU via Vulkan when available). For Cantonese or Mandarin, pick **Cantonese (粵語)** or **Mandarin (普通话)** as the speech model: they use SenseVoice (sherpa-onnx), also on your computer. See [docs/cantonese.md](docs/cantonese.md) and [docs/mandarin.md](docs/mandarin.md).
 2. **Claude** tidies it up: removes "um", follows "scratch that", fixes misheard words, and spells your names right.
 3. Wirl **pastes** the result where your cursor is, then puts your clipboard back.
 
@@ -70,7 +70,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."     # only in this PowerShell window; neve
 cargo run -p wirl-core --example cleanup_quality
 ```
 
-It runs 31 cases from `tests/quality/cases.json` (self-corrections, restarts, spoken commands, sound-alikes, dictionary terms, unchanged clean text, casual tone, and Cantonese mixed with English) through the exact same request the app sends. It is never run in GitHub Actions.
+It runs 38 cases from `tests/quality/cases.json` (self-corrections, restarts, spoken commands, sound-alikes, dictionary terms, unchanged clean text, casual tone, and Cantonese and Mandarin mixed with English; add `-- cantonese` or `-- mandarin` to run just those) through the exact same request the app sends. It is never run in GitHub Actions.
 
 ## Layout
 

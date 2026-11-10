@@ -101,7 +101,9 @@ fn main() {
             }
         };
         match req {
-            Request::Load { model_path, use_gpu } => {
+            Request::Load {
+                model_path, use_gpu, ..
+            } => {
                 let t = Instant::now();
                 loaded = None; // free the old model first
                 match load(&model_path, use_gpu) {

@@ -25,9 +25,16 @@
   { "name": "Filler words removed", "input": "um so uh I was thinking you know we could like start early", "notContains": ["um ", "uh ", "you know"], "contains": ["start early"] },
   { "name": "No intended words", "input": "um uh hmm", "equals": "" },
   { "name": "Style notes applied", "input": "what color is your favorite car", "style": "Use British spelling.", "contains": ["colour", "favourite"] },
-  { "name": "Cantonese: English kept, traditional characters", "cantonese": true, "input": "我今日下昼有个 meeting 之后要 send 个 email 俾我老板", "contains": ["下晝", "meeting", "send", "email", "老闆"], "containsAny": ["，", "。"], "notContains": ["个", "板", "后", "下午"] },
-  { "name": "Cantonese: particles kept, filler removed", "cantonese": true, "input": "呃你 book 咗听日晚饭未啊 嗯 我想去间新开嘅日本餐厅", "contains": ["book", "咗", "聽日", "晚飯", "嘅"], "containsAny": ["？"], "notContains": ["呃", "嗯", "听", "饭"] },
-  { "name": "Cantonese: stays spoken, not formal Chinese", "cantonese": true, "input": "佢话个 presentation 好成功个 client 好钟意", "contains": ["佢", "presentation", "client", "鍾意"], "notContains": ["他", "喜歡", "说"] },
-  { "name": "Cantonese: self-correction", "cantonese": true, "input": "我哋三点 唔系 四点喺铜锣湾等", "contains": ["我哋", "四點", "銅鑼灣", "喺"], "notContains": ["三點", "我們"] },
-  { "name": "Cantonese: dictionary term", "cantonese": true, "input": "听日同西拉去饮茶", "dictionary": [{ "term": "Sela", "soundsLike": ["西拉"] }], "contains": ["Sela", "飲茶", "聽日"], "notContains": ["西拉"] }
+  { "name": "Cantonese: English kept, traditional characters", "mode": "cantonese", "input": "我今日下昼有个 MEETING 之后要 SEND 个 EMAIL 俾我老板", "contains": ["下晝", "meeting", "send", "email", "老闆"], "containsAny": ["，", "。"], "notContains": ["个", "板", "后"] },
+  { "name": "Cantonese: filler removed, question, particles kept", "mode": "cantonese", "input": "呃你 BOOK 咗听日晚饭未啊 嗯 我想去间新开嘅日本餐厅", "contains": ["book", "咗", "聽日", "晚飯", "嘅"], "containsAny": ["？"], "notContains": ["呃", "嗯", "听", "饭"] },
+  { "name": "Cantonese: self-correction", "mode": "cantonese", "input": "我哋三点 唔系 四点喺铜锣湾等", "contains": ["我哋", "四點", "銅鑼灣", "喺"], "notContains": ["三點", "我們"] },
+  { "name": "Cantonese: dictionary term", "mode": "cantonese", "input": "听日同西拉去饮茶", "dictionary": [{ "term": "Sela", "soundsLike": ["西拉"] }], "contains": ["Sela", "飲茶", "聽日"], "notContains": ["西拉"] },
+  { "name": "Cantonese: Mandarin-style characters become Cantonese", "mode": "cantonese", "input": "佢话个 PRESENTATION 好成功 他们话下个 FRIDAY 再倾", "contains": ["佢哋", "presentation", "friday", "傾"], "notContains": ["他们", "他們", "他說"] },
+  { "name": "Cantonese: stays spoken, not formal Chinese", "mode": "cantonese", "input": "佢话个 PRESENTATION 好成功个 CLIENT 好钟意", "contains": ["佢", "presentation", "client", "鍾意"], "notContains": ["他", "喜歡", "说"] },
+  { "name": "Mandarin: English kept, simplified characters", "mode": "mandarin", "input": "我今天下午有个 MEETING 然后要 SEND 一个 EMAIL 给我老板", "contains": ["下午", "meeting", "send", "email", "老板"], "containsAny": ["，", "。"], "notContains": ["個", "闆", "嘅", "佢"] },
+  { "name": "Mandarin: filler removed, question", "mode": "mandarin", "input": "嗯那个你 BOOK 了明天的晚饭吗 就是说 我想去那家新开的日本餐厅", "contains": ["book", "明天", "晚饭", "日本餐厅"], "containsAny": ["？"], "notContains": ["嗯", "就是说", "晚飯"] },
+  { "name": "Mandarin: self-correction", "mode": "mandarin", "input": "我们三点 不对 四点在国贸见", "contains": ["四点", "国贸"], "notContains": ["三点", "國貿"] },
+  { "name": "Mandarin: dictionary term", "mode": "mandarin", "input": "明天跟西拉去喝咖啡", "dictionary": [{ "term": "Sela", "soundsLike": ["西拉"] }], "contains": ["Sela", "咖啡", "明天"], "notContains": ["西拉"] },
+  { "name": "Mandarin: same-sound character fixed", "mode": "mandarin", "input": "这个 PROJECT 的 DEADLINE 是下个星期五 我们要加油完程", "contains": ["project", "deadline", "完成", "星期五"], "notContains": ["完程"] },
+  { "name": "Mandarin: no Cantonese words", "mode": "mandarin", "input": "他说那个 CLIENT 很喜欢我们的 PRESENTATION", "contains": ["他", "喜欢", "client", "presentation"], "notContains": ["佢", "鍾意", "喜歡", "嘅"] }
 ]

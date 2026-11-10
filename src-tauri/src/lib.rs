@@ -70,6 +70,7 @@ pub fn run() {
             commands::update_settings,
             commands::download_model,
             commands::cancel_download,
+            commands::delete_model,
             commands::set_api_key,
             commands::clear_api_key,
             commands::dict_add,
@@ -110,6 +111,10 @@ pub fn run() {
             cloud_sync::start();
             dictation::start_watchdog();
             updater::start_schedule();
+            // Settings were migrated when loaded (Settings::from_json); save
+            // the upgraded version and delete retired model files.
+            a.save_settings();
+            a.remove_retired_models();
             let s = a.settings();
             // Keep the active model loaded while the app runs.
             if a.model_ready(s.model) {

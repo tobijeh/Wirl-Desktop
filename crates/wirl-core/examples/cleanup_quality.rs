@@ -33,9 +33,10 @@ struct Case {
     input: String,
     #[serde(default)]
     style: String,
-    /// The input came from the Cantonese model (adds the Cantonese block).
+    /// Which model the input came from: "cantonese" or "mandarin" adds that
+    /// cleanup block; empty is standard (English).
     #[serde(default)]
-    cantonese: bool,
+    mode: String,
     #[serde(default)]
     dictionary: Vec<DictItem>,
     #[serde(default)]
@@ -109,11 +110,14 @@ async fn main() {
                 .expect("dictionary entry");
         }
         // Same relevance filter the app uses.
-        let entries: Vec<&Entry> = dict.matching(&c.input);
-        let mode = if c.cantonese {
-            PromptMode::Cantonese
-        } else {
-            PromptMode::Standard
+        let mode = match c.mode.as_str() {
+            "cantonese" => PromptMode::Cantonese,
+            "mandarin" => PromptMode::Mandarin,
+            _ => PromptMode::Standard,
+        };
+        let entries: Vec<&Entry> = match mode {
+            PromptMode::Standard => dict.matching(&c.input),
+            _ => dict.matching_chinese(&c.input),
         };
         match client
             .cleanup(&key, mode, &c.input, &c.style, &entries, Duration::from_secs(30))

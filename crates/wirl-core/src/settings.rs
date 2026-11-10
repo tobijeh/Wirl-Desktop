@@ -9,15 +9,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum ModelId {
-    /// base.en, quantized.
+    /// English · Fast: Whisper base.en, quantized.
     #[default]
     Fast,
-    /// small.en
+    /// English · Accurate: Whisper small.en.
     Accurate,
-    /// base (multilingual)
-    Multilingual,
     /// SenseVoice (sherpa-onnx), Cantonese with English mixed in.
     Cantonese,
+    /// SenseVoice (the same files), Mandarin with English mixed in.
+    Mandarin,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -69,10 +69,11 @@ pub struct Settings {
     pub start_with_windows: bool,
     pub first_run_done: bool,
 
-    // Dictation
+    /// Settings format version (see [`SETTINGS_VERSION`] and `migrate`).
+    pub version: u32,
+
+    // Dictation. The model decides the language (models::SpeechLanguage).
     pub model: ModelId,
-    /// Whisper language code ("en", "auto", "de", ...).
-    pub language: String,
     pub pause_media: bool,
 
     // AI cleanup
@@ -105,8 +106,8 @@ impl Default for Settings {
             enabled: true,
             start_with_windows: true,
             first_run_done: false,
+            version: SETTINGS_VERSION,
             model: ModelId::Fast,
-            language: "en".into(),
             pause_media: true,
             cleanup_enabled: true,
             style_notes: String::new(),
@@ -134,43 +135,48 @@ impl Settings {
         }
     }
 
+    /// Reads saved settings, upgrading older formats first (see `migrate`).
     pub fn from_json(s: &str) -> Settings {
-        serde_json::from_str(s).unwrap_or_default()
+        match serde_json::from_str::<serde_json::Value>(s) {
+            Ok(mut v) => {
+                migrate(&mut v);
+                serde_json::from_value(v).unwrap_or_default()
+            }
+            Err(_) => Settings::default(),
+        }
     }
 }
 
-/// Languages offered in the picker: (whisper code, label).
-pub const LANGUAGES: &[(&str, &str)] = &[
-    ("en", "English (US)"),
-    ("auto", "Detect automatically"),
-    ("es", "Spanish"),
-    ("fr", "French"),
-    ("de", "German"),
-    ("it", "Italian"),
-    ("pt", "Portuguese"),
-    ("nl", "Dutch"),
-    ("pl", "Polish"),
-    ("sv", "Swedish"),
-    ("da", "Danish"),
-    ("no", "Norwegian"),
-    ("fi", "Finnish"),
-    ("ru", "Russian"),
-    ("uk", "Ukrainian"),
-    ("tr", "Turkish"),
-    ("ar", "Arabic"),
-    ("he", "Hebrew"),
-    ("hi", "Hindi"),
-    ("ja", "Japanese"),
-    ("ko", "Korean"),
-    ("zh", "Chinese"),
-];
+/// Current settings format.
+/// - 1 (no `version`): a separate `language` setting and a Multilingual model.
+/// - 2: one model per language; Multilingual and `language` removed.
+pub const SETTINGS_VERSION: u32 = 2;
 
-pub fn language_label(code: &str) -> &'static str {
-    LANGUAGES
-        .iter()
-        .find(|(c, _)| *c == code)
-        .map(|(_, l)| *l)
-        .unwrap_or("English (US)")
+/// The Whisper file of the removed Multilingual model. The app deletes it
+/// (and any partial download) at start-up.
+pub const REMOVED_MULTILINGUAL_FILE: &str = "ggml-base.bin";
+
+/// Upgrades saved settings to [`SETTINGS_VERSION`] in place. A model that no
+/// longer exists becomes English · Fast, so nobody is left with an invalid
+/// choice (which would otherwise reset every setting).
+fn migrate(v: &mut serde_json::Value) {
+    let Some(obj) = v.as_object_mut() else { return };
+    let version = obj.get("version").and_then(|x| x.as_u64()).unwrap_or(1);
+    if version < 2 {
+        obj.remove("language");
+        if obj.get("model").and_then(|m| m.as_str()) == Some("multilingual") {
+            obj.insert("model".into(), "fast".into());
+        }
+    }
+    // Any unknown model name (e.g. from a newer version) also falls back.
+    let known = obj
+        .get("model")
+        .map(|m| serde_json::from_value::<ModelId>(m.clone()).is_ok())
+        .unwrap_or(true);
+    if !known {
+        obj.insert("model".into(), "fast".into());
+    }
+    obj.insert("version".into(), SETTINGS_VERSION.into());
 }
 
 #[cfg(test)]
@@ -195,6 +201,37 @@ mod tests {
         assert_eq!(s.pill_position, PillPosition::NearMouse);
         assert!(s.hold_to_talk);
         assert_eq!(Settings::from_json("garbage"), Settings::default());
+    }
+
+    #[test]
+    fn multilingual_users_move_to_english_fast() {
+        let old = r#"{"model":"multilingual","language":"de","chime":false,"holdToTalk":false}"#;
+        let s = Settings::from_json(old);
+        assert_eq!(s.model, ModelId::Fast);
+        assert_eq!(s.version, SETTINGS_VERSION);
+        // Everything else is kept.
+        assert!(!s.chime && !s.hold_to_talk);
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("language") && !json.contains("multilingual"));
+    }
+
+    #[test]
+    fn old_settings_keep_their_model_and_unknown_models_fall_back() {
+        assert_eq!(
+            Settings::from_json(r#"{"model":"accurate","language":"en"}"#).model,
+            ModelId::Accurate
+        );
+        assert_eq!(
+            Settings::from_json(r#"{"model":"cantonese"}"#).model,
+            ModelId::Cantonese
+        );
+        assert_eq!(
+            Settings::from_json(r#"{"version":2,"model":"mandarin"}"#).model,
+            ModelId::Mandarin
+        );
+        let s = Settings::from_json(r#"{"version":2,"model":"klingon","chime":false}"#);
+        assert_eq!(s.model, ModelId::Fast);
+        assert!(!s.chime);
     }
 
     #[test]

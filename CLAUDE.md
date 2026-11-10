@@ -9,7 +9,7 @@ A system-tray dictation app: hotkey → record → Whisper or SenseVoice (local)
 ## Hard rules
 
 1. **No API keys in the repo or in GitHub Actions.** Each user enters their own Anthropic key in Setup; it lives in Windows Credential Manager (`keyring`). The quality-test script reads `ANTHROPIC_API_KEY` from the environment at run time and never saves it. Never add a workflow step that calls the Claude API.
-2. **The core cleanup prompt is fixed.** `wirl_core::prompt::CORE_PROMPT` must match the product spec character for character and is not user-editable. Only style notes and matching dictionary entries are appended (in that order, under the exact headers in `prompt.rs`). Exception: when the Cantonese model produced the transcript, `CANTONESE_BLOCK` goes right after the core prompt (see Cantonese model below).
+2. **The core cleanup prompt is fixed.** `wirl_core::prompt::CORE_PROMPT` must match the product spec character for character and is not user-editable. Only style notes and matching dictionary entries are appended (in that order, under the exact headers in `prompt.rs`). Exception: when the Cantonese or Mandarin model produced the transcript, `CANTONESE_BLOCK` or `MANDARIN_BLOCK` goes right after the core prompt (see Speech models below).
 3. **Cleanup request:** model `claude-haiku-5-5`, `thinking: {type: "disabled"}`, `output_config.effort: "low"`, no sampling parameters, streamed. One shared function (`ClaudeClient::cleanup`) for dictation, clean-selection and the quality script.
 4. **Icons are used exactly as provided.** The 25 PNGs cut from `wirl-icons-sheet.png` (or a `wirl-icons.zip`) (in `ui/assets/icons/`, order and default from `icons.json`) are never redrawn, restyled or substituted. Only scaling for `.ico`/tray sizes and the tray-state overlays (red ring on the tray icon only, dimming, greyscale, amber badge, green dot) are allowed.
 5. **Sync protocol is shared with Android.** Any change must be made in `docs/sync-protocol.md` first and stay wire-compatible. The `known_test_vector` test pins the crypto.
@@ -36,7 +36,7 @@ crates/wirl-core      pure logic (unit tested, builds anywhere)
   onboarding.rs       usage counts, one-time clean-up tip, shortcut card rule
   settings.rs, models.rs (catalog + resumable verified download), ipc.rs, icons.rs, diagnostics.rs, watchdog.rs
 crates/wirl-whisper   sidecar: JSON lines over stdin/stdout, whisper-rs
-crates/wirl-sensevoice  sidecar for the Cantonese model: same protocol, sherpa-onnx (static, no DLLs)
+crates/wirl-sensevoice  sidecar for the Cantonese and Mandarin models: same protocol, sherpa-onnx (static, no DLLs)
 relay/                Cloudflare Worker: one Durable Object per mailbox (rules in src/mailbox.js, node tests)
 crates/wirl-icons     slice wirl-icons-sheet.png / unzip wirl-icons.zip → ui/assets/icons, generate src-tauri/icons
 src-tauri/src
@@ -78,14 +78,17 @@ Copy selection → `UndoTracker::on_hotkey`. Same text as the last cleanup → p
 - Relay URL: `wirl_core::sync::DEFAULT_RELAY` (`https://wirl-relay.wirl.workers.dev`), overridable at build time with `WIRL_RELAY_URL`. Phones take it from the QR code.
 - Manual end-to-end check: run the relay locally (`cd relay && npx wrangler@4 dev --local --port 8799`) and `WIRL_RELAY_URL=http://127.0.0.1:8799 cargo run -p wirl-core --example relay_smoke`.
 
-## Cantonese model
+## Speech models (one per language)
 
-- **Cantonese (粵語)** on the Dictation page runs SenseVoice (`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`, official k2-fsa release) through sherpa-onnx in `wirl-sensevoice`. Details, test results and the shared prompt block: `docs/cantonese.md`.
-- The model is downloaded in the app (166 MB `.tar.bz2`, SHA-256 checked, unpacked to `model.int8.onnx` + `tokens.txt`), never bundled. `models::Engine` says which sidecar runs a model; one engine process runs at a time.
-- sherpa-onnx is the official `sherpa-onnx` crate, pinned exactly (`=1.13.8`), linked statically. Its Windows libraries are built with /MT, so the sidecar is built with `-C target-feature=+crt-static` (`build-sidecars.ps1`, its own target folder). It's excluded from the lint job's clippy/tests and checked in the build job instead (clippy, start-up smoke test, real recognition on a test clip).
-- Language is fixed to `yue`, `use_itn` is on. All-capital English from SenseVoice is lower-cased; chunks are joined without spaces between Chinese characters.
-- Cleanup: `PromptMode::Cantonese` adds `CANTONESE_BLOCK` after the core prompt, for dictations from this model only (clean-selection is unchanged). **The block must stay identical in the Android (Wirlwind) and desktop repos**; `docs/cantonese.md` holds the shared copy and a unit test checks the code matches it.
-- Dictionary entries written in Chinese characters are always sent in Cantonese mode (the model writes simplified, entries are usually traditional).
+- The Dictation page has one **Speech model** list, one row per model, each naming its language (same names and wording as Android): **English · Fast** (Whisper base.en), **English · Accurate** (Whisper small.en), **Cantonese (粵語)**, **Mandarin (普通话)**. There is **no separate language setting**: the model decides what the engine is told (`en`, `yue`, `zh`: `SpeechLanguage::code`) and the cleanup mode (`SpeechLanguage::prompt_mode`), so they can't disagree. The model name (`ModelInfo::name`) is used everywhere it's shown.
+- **Multilingual was removed.** `Settings::from_json` migrates old settings (`SETTINGS_VERSION` 2): `multilingual` (or any unknown model) becomes `fast`, the old `language` key is dropped, and the app deletes `ggml-base.bin` at start-up (`App::remove_retired_models`).
+- Rows show size, progress, Cancel (keeps the `.part` file; the row offers Resume), Download or Delete (asks first, in the row). The chosen model, when not downloaded, gets an amber note. Downloads are tracked **per file**.
+- **Cantonese and Mandarin** run SenseVoice (`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`, int8, official k2-fsa `asr-models` release) through sherpa-onnx in `wirl-sensevoice`, with the **same files** (one download; rows say "one download for Cantonese and Mandarin"; deleting either removes both, with a warning). Details: `docs/cantonese.md`, `docs/mandarin.md`.
+- The SenseVoice archive (165,783,878 bytes, SHA-256 checked) is downloaded in the app, never bundled; only `model.int8.onnx` (237,115,547 bytes) and `tokens.txt` (315,894 bytes) are unpacked, sizes checked, then the archive is deleted.
+- sherpa-onnx is the official `sherpa-onnx` crate, pinned exactly (`=2.0.1`, same as Android), linked statically. Its Windows libraries are built with /MT, so the sidecar is built with `-C target-feature=+crt-static` (`build-sidecars.ps1`, its own target folder). It's excluded from the lint job's clippy/tests and checked in the build job instead (clippy, start-up smoke test, real recognition on a test clip).
+- Language is fixed per model (`yue` / `zh`, never `auto`) and sent with `Load`, so switching Cantonese ↔ Mandarin reloads with the other language. `use_itn` is on. All-capital English from SenseVoice is lower-cased; chunks are joined without a space between two Chinese pieces (a space stays next to English). Diagnostics name the stages "SenseVoice chunk N" / "SenseVoice after stop".
+- Cleanup: `PromptMode::Cantonese` / `PromptMode::Mandarin` add `CANTONESE_BLOCK` / `MANDARIN_BLOCK` after the core prompt, before style notes, for dictations from those models only (clean-selection is unchanged). **Both blocks must stay identical in the Android (Wirlwind) and desktop repos**; `docs/cantonese.md` and `docs/mandarin.md` hold the shared copies (the Android repo has the same two files) and unit tests check the code matches them.
+- Dictionary entries written in Chinese characters are always sent in Cantonese and Mandarin mode (`Dictionary::matching_chinese`; the model writes simplified, entries are often traditional).
 
 ## Welcome tour (onboarding)
 

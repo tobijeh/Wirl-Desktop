@@ -362,8 +362,8 @@ pub fn assemble(parts: &[(usize, String)]) -> String {
     v.sort_by_key(|p| p.0);
     let mut out = String::new();
     for t in v.iter().map(|p| p.1.trim()).filter(|t| !t.is_empty()) {
-        // Chinese and Japanese text has no spaces between words.
-        let tight = out.chars().next_back().is_some_and(is_cjk) || t.chars().next().is_some_and(is_cjk);
+        // No space between two Chinese pieces; English keeps its spaces.
+        let tight = out.chars().next_back().is_some_and(is_cjk) && t.chars().next().is_some_and(is_cjk);
         if !out.is_empty() && !tight {
             out.push(' ');
         }
@@ -399,7 +399,9 @@ mod tests {
             (0, "我今日有个 MEETING".into()),
             (2, "OK".into()),
         ];
-        assert_eq!(assemble(&zh), "我今日有个 MEETING之后要 SEND 个 EMAIL OK");
+        assert_eq!(assemble(&zh), "我今日有个 MEETING 之后要 SEND 个 EMAIL OK");
+        let zh3 = vec![(0, "我今日".to_string()), (1, "有个 MEETING".into())];
+        assert_eq!(assemble(&zh3), "我今日有个 MEETING");
         let zh2 = vec![(0, "你好。".to_string()), (1, "我系".into())];
         assert_eq!(assemble(&zh2), "你好。我系");
     }

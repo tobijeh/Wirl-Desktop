@@ -56,6 +56,20 @@ The speaker is talking Cantonese, often mixed with English.
 - Apply the personal dictionary as usual.
 --- END CANTONESE MODE ---";
 
+/// Added after the core prompt when the Mandarin model produced the
+/// transcript. Must stay identical to the Android app (docs/mandarin.md).
+pub const MANDARIN_BLOCK: &str = "--- MANDARIN MODE ---
+The speaker is talking Mandarin Chinese, often mixed with English.
+- Write in natural written Mandarin as the speaker said it, in simplified characters (mainland China style).
+- Never use traditional characters, and never use Cantonese words or characters (such as 佢, 嘅, 唔, 咗, 喺).
+- Keep English words and phrases in English, exactly where they were spoken.
+- Fix characters the speech recognizer got wrong, where a character with the same sound (同音字) clearly makes more sense.
+- Remove filler sounds and words (such as 嗯, 呃, 那个, 就是说) and false starts. Keep sentence-final particles (such as 吧, 呢, 啊, 嘛) when they carry meaning or tone.
+- Use full-width Chinese punctuation (，。？！：) in Chinese text.
+- Polish lightly. The result should read like the speaker typed it themselves in a message.
+- Apply the personal dictionary as usual.
+--- END MANDARIN MODE ---";
+
 /// Which extra instructions go with the core prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PromptMode {
@@ -63,19 +77,26 @@ pub enum PromptMode {
     Standard,
     /// The transcript came from the Cantonese model.
     Cantonese,
+    /// The transcript came from the Mandarin model.
+    Mandarin,
 }
 
 pub const STYLE_HEADER: &str = "Speaker's style preferences:";
 pub const DICTIONARY_HEADER: &str = "Always spell these terms exactly as written. If a word sounds like a term or matches a listed mishearing, and the context fits the note, replace it with the term:";
 
-/// Builds the full system prompt: core prompt (plus the Cantonese block in
-/// Cantonese mode), then optional style notes, then the dictionary entries
+/// Builds the full system prompt: core prompt (plus the Cantonese or
+/// Mandarin block in those modes), then optional style notes, then the dictionary entries
 /// that plausibly match this dictation.
 pub fn build_system_prompt(mode: PromptMode, style_notes: &str, entries: &[&Entry]) -> String {
     let mut s = String::from(CORE_PROMPT);
-    if mode == PromptMode::Cantonese {
+    let block = match mode {
+        PromptMode::Standard => None,
+        PromptMode::Cantonese => Some(CANTONESE_BLOCK),
+        PromptMode::Mandarin => Some(MANDARIN_BLOCK),
+    };
+    if let Some(b) = block {
         s.push_str("\n\n");
-        s.push_str(CANTONESE_BLOCK);
+        s.push_str(b);
     }
     let style = style_notes.trim();
     if !style.is_empty() {
@@ -208,6 +229,18 @@ mod tests {
         assert!(CANTONESE_BLOCK.starts_with("--- CANTONESE MODE ---\n"));
         assert!(CANTONESE_BLOCK.ends_with("\n--- END CANTONESE MODE ---"));
         assert_eq!(CANTONESE_BLOCK.lines().count(), 11);
+    }
+
+    #[test]
+    fn mandarin_block_matches_docs_and_sits_after_core_prompt() {
+        let doc = include_str!("../../../docs/mandarin.md").replace("\r\n", "\n");
+        assert!(doc.contains(&format!("```text\n{MANDARIN_BLOCK}\n```")));
+        assert!(MANDARIN_BLOCK.starts_with("--- MANDARIN MODE ---\n"));
+        assert!(MANDARIN_BLOCK.ends_with("\n--- END MANDARIN MODE ---"));
+        let sys = build_system_prompt(PromptMode::Mandarin, "Short sentences.", &[]);
+        assert!(sys.starts_with(&format!("{CORE_PROMPT}\n\n{MANDARIN_BLOCK}\n\n{STYLE_HEADER}")));
+        assert!(!sys.contains("CANTONESE"));
+        assert!(!build_system_prompt(PromptMode::Cantonese, "", &[]).contains("MANDARIN"));
     }
 
     #[test]

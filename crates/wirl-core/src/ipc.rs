@@ -11,6 +11,10 @@ pub enum Request {
     Load {
         model_path: String,
         use_gpu: bool,
+        /// The language the model runs with (SenseVoice: "yue" or "zh");
+        /// Whisper gets it per request instead and ignores this.
+        #[serde(default)]
+        language: String,
     },
     Transcribe {
         id: u64,

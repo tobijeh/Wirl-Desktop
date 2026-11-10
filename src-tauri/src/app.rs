@@ -33,7 +33,7 @@ pub struct DownloadState {
     pub total: u64,
     pub error: Option<String>,
     pub active: bool,
-    /// Downloaded and being unpacked (the Cantonese model).
+    /// Downloaded and being unpacked (the Cantonese / Mandarin model).
     pub unpacking: bool,
 }
 
@@ -63,8 +63,10 @@ pub struct App {
     pub trigger: Mutex<DictateTrigger>,
     pub undo: Mutex<UndoTracker>,
     pub watchdog: Mutex<Watchdog>,
-    pub downloads: Mutex<HashMap<ModelId, DownloadState>>,
-    pub download_cancel: Mutex<HashMap<ModelId, Arc<AtomicBool>>>,
+    /// Keyed by the model's file, so models sharing files (Cantonese and
+    /// Mandarin) share one download.
+    pub downloads: Mutex<HashMap<&'static str, DownloadState>>,
+    pub download_cancel: Mutex<HashMap<&'static str, Arc<AtomicBool>>>,
     pub update: Mutex<UpdateStatus>,
     pub hotkey_conflicts: Mutex<Vec<(wirl_core::hotkey::Action, Conflict)>>,
     pub capturing_hotkey: AtomicBool,
@@ -175,6 +177,26 @@ impl App {
 
     pub fn model_ready(&self, id: ModelId) -> bool {
         self.model_path(id).exists()
+    }
+
+    /// Bytes of a partial download that Download will resume from.
+    pub fn model_partial(&self, id: ModelId) -> u64 {
+        let p = models::download::part_path(&self.paths.models, models::info(id));
+        std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+    }
+
+    /// Settings migration, file side: the Multilingual model was removed, so
+    /// its file (and any partial download) is deleted. Safe to run every start.
+    pub fn remove_retired_models(&self) {
+        let f = wirl_core::settings::REMOVED_MULTILINGUAL_FILE;
+        for p in [self.paths.models.join(f), self.paths.models.join(format!("{f}.part"))] {
+            if p.exists() {
+                match std::fs::remove_file(&p) {
+                    Ok(()) => log::info!("removed retired model file {}", p.display()),
+                    Err(e) => log::warn!("couldn't remove {}: {e}", p.display()),
+                }
+            }
+        }
     }
 
     /// Number of setup items needing attention (Home page / tray badge).

@@ -1,4 +1,4 @@
-//! Wirl's SenseVoice sidecar (the "Cantonese (粵語)" model). Runs
+//! Wirl's SenseVoice sidecar (the Cantonese (粵語) and Mandarin (普通话) models). Runs
 //! sherpa-onnx in its own process so a crash, hang or out-of-memory here
 //! never takes down the app; the app times out, restarts it and reloads.
 //!
@@ -6,7 +6,8 @@
 //! per line, stdout carries only protocol messages, logs go to stderr.
 //!
 //! `Load.model_path` is the model folder (model.int8.onnx + tokens.txt).
-//! `Transcribe.language` is SenseVoice's language ("yue", "auto", ...);
+//! `Load.language` and `Transcribe.language` are SenseVoice's language
+//! ("yue" for Cantonese, "zh" for Mandarin);
 //! the initial prompt and audio_ctx are Whisper-only and ignored here.
 //!
 //! Manual check on a WAV file (16-bit mono):
@@ -90,7 +91,7 @@ fn recognize(l: &Loaded, samples: &[f32]) -> String {
 }
 
 /// The language the model is loaded with until a request asks for another.
-const DEFAULT_LANGUAGE: &str = wirl_core::models::CANTONESE_LANGUAGE;
+const DEFAULT_LANGUAGE: &str = "yue";
 
 fn cli(args: &[String]) -> Result<(), String> {
     let mut model = None;
@@ -159,12 +160,18 @@ fn main() {
             }
         };
         match req {
-            Request::Load { model_path, .. } => {
+            Request::Load {
+                model_path, language, ..
+            } => {
                 let t = Instant::now();
-                let language = loaded
-                    .as_ref()
-                    .map(|l| l.language.clone())
-                    .unwrap_or_else(|| DEFAULT_LANGUAGE.into());
+                let language = if !language.is_empty() {
+                    language
+                } else {
+                    loaded
+                        .as_ref()
+                        .map(|l| l.language.clone())
+                        .unwrap_or_else(|| DEFAULT_LANGUAGE.into())
+                };
                 loaded = None; // free the old model first
                 match create(&model_path, &language) {
                     Ok(l) => {

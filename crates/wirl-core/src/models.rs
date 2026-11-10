@@ -1,5 +1,10 @@
 //! Speech model catalog and the resumable, verified downloader.
+//!
+//! One model per language: the chosen model decides what the engine is told
+//! (`en`, `yue` or `zh`) and which cleanup mode is used, so the two can never
+//! disagree. Cantonese and Mandarin share one SenseVoice download.
 
+use crate::prompt::PromptMode;
 use crate::settings::ModelId;
 use serde::Serialize;
 
@@ -13,14 +18,47 @@ pub enum Engine {
     SenseVoice,
 }
 
+/// The language a model dictates in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SpeechLanguage {
+    English,
+    Cantonese,
+    Mandarin,
+}
+
+impl SpeechLanguage {
+    /// What the engine is told. SenseVoice gets a fixed `yue` / `zh`, never
+    /// `auto`: on Chinese mixed with English it was as good as auto, and a
+    /// short clip can't be mistaken for the other language.
+    pub fn code(self) -> &'static str {
+        match self {
+            SpeechLanguage::English => "en",
+            SpeechLanguage::Cantonese => "yue",
+            SpeechLanguage::Mandarin => "zh",
+        }
+    }
+
+    /// The cleanup mode for transcripts in this language.
+    pub fn prompt_mode(self) -> PromptMode {
+        match self {
+            SpeechLanguage::English => PromptMode::Standard,
+            SpeechLanguage::Cantonese => PromptMode::Cantonese,
+            SpeechLanguage::Mandarin => PromptMode::Mandarin,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
     pub id: ModelId,
+    /// Shown everywhere the model is named ("English · Fast").
     pub name: &'static str,
     pub description: &'static str,
     /// What sits in the models folder when the model is ready: a file
-    /// (Whisper) or a folder unpacked from `archive` (SenseVoice).
+    /// (Whisper) or a folder unpacked from `archive` (SenseVoice). Models
+    /// with the same `file` share one download.
     pub file: &'static str,
     /// The `.tar.bz2` that is downloaded and unpacked into `file`, if any.
     pub archive: Option<&'static str>,
@@ -28,7 +66,7 @@ pub struct ModelInfo {
     pub size: u64,
     /// SHA-256 of what is downloaded.
     pub sha256: &'static str,
-    pub english_only: bool,
+    pub language: SpeechLanguage,
     pub engine: Engine,
 }
 
@@ -36,57 +74,57 @@ pub const BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve
 /// Official sherpa-onnx ASR model releases (k2-fsa/sherpa-onnx, tag asr-models).
 pub const SHERPA_MODELS_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/";
 
-/// SenseVoice's language for the Cantonese model. Tested against "auto" on the
-/// model's Cantonese clips and on Cantonese mixed with English: the results were
-/// the same or slightly better, and short clips can't be mistaken for Mandarin.
-pub const CANTONESE_LANGUAGE: &str = "yue";
+const SENSEVOICE_FOLDER: &str = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09";
+const SENSEVOICE_ARCHIVE: &str = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2";
+const SENSEVOICE_SIZE: u64 = 165_783_878;
+const SENSEVOICE_SHA256: &str = "7305f7905bfcf77fa0b39388a313f3da35c68d971661a65475b56fb2162c8e63";
 
-/// Files the SenseVoice sidecar needs from the unpacked archive.
-pub const SENSEVOICE_FILES: &[&str] = &["model.int8.onnx", "tokens.txt"];
+/// Files the SenseVoice sidecar needs from the archive, with their sizes.
+pub const SENSEVOICE_FILES: &[(&str, u64)] = &[("model.int8.onnx", 237_115_547), ("tokens.txt", 315_894)];
 
 pub const MODELS: &[ModelInfo] = &[
     ModelInfo {
         id: ModelId::Fast,
-        name: "Fast",
-        description: "Quick and light. English only.",
+        name: "English · Fast",
+        description: "Quickest. Great for everyday texts.",
         file: "ggml-base.en-q5_1.bin",
+        archive: None,
         size: 59_721_011,
         sha256: "4baf70dd0d7c4247ba2b81fafd9c01005ac77c2f9ef064e00dcf195d0e2fdd2f",
-        english_only: true,
-        archive: None,
+        language: SpeechLanguage::English,
         engine: Engine::Whisper,
     },
     ModelInfo {
         id: ModelId::Accurate,
-        name: "Accurate",
-        description: "Better with names and accents. English only. Slower.",
+        name: "English · Accurate",
+        description: "Better with names and long messages.",
         file: "ggml-small.en.bin",
+        archive: None,
         size: 487_614_201,
         sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
-        english_only: true,
-        archive: None,
-        engine: Engine::Whisper,
-    },
-    ModelInfo {
-        id: ModelId::Multilingual,
-        name: "Multilingual",
-        description: "Understands many languages.",
-        file: "ggml-base.bin",
-        size: 147_951_465,
-        sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
-        english_only: false,
-        archive: None,
+        language: SpeechLanguage::English,
         engine: Engine::Whisper,
     },
     ModelInfo {
         id: ModelId::Cantonese,
         name: "Cantonese (粵語)",
         description: "Cantonese with English mixed in. Writes as you speak, in traditional characters.",
-        file: "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
-        archive: Some("sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2"),
-        size: 165_783_878,
-        sha256: "7305f7905bfcf77fa0b39388a313f3da35c68d971661a65475b56fb2162c8e63",
-        english_only: false,
+        file: SENSEVOICE_FOLDER,
+        archive: Some(SENSEVOICE_ARCHIVE),
+        size: SENSEVOICE_SIZE,
+        sha256: SENSEVOICE_SHA256,
+        language: SpeechLanguage::Cantonese,
+        engine: Engine::SenseVoice,
+    },
+    ModelInfo {
+        id: ModelId::Mandarin,
+        name: "Mandarin (普通话)",
+        description: "Mandarin with English mixed in. Writes in simplified characters.",
+        file: SENSEVOICE_FOLDER,
+        archive: Some(SENSEVOICE_ARCHIVE),
+        size: SENSEVOICE_SIZE,
+        sha256: SENSEVOICE_SHA256,
+        language: SpeechLanguage::Mandarin,
         engine: Engine::SenseVoice,
     },
 ];
@@ -96,6 +134,16 @@ pub fn info(id: ModelId) -> &'static ModelInfo {
         .iter()
         .find(|m| m.id == id)
         .expect("every ModelId is in the catalog")
+}
+
+/// The other models that use the same downloaded files (Cantonese ↔ Mandarin).
+pub fn sharing_files(id: ModelId) -> Vec<ModelId> {
+    let file = info(id).file;
+    MODELS
+        .iter()
+        .filter(|m| m.file == file && m.id != id)
+        .map(|m| m.id)
+        .collect()
 }
 
 pub fn url(m: &ModelInfo) -> String {
@@ -110,42 +158,15 @@ pub fn download_name(m: &ModelInfo) -> &'static str {
     m.archive.unwrap_or(m.file)
 }
 
-/// Language actually passed to the engine: English-only models always get
-/// "en", the Cantonese model always gets [`CANTONESE_LANGUAGE`].
-pub fn effective_language(id: ModelId, chosen: &str) -> String {
-    let m = info(id);
-    if m.engine == Engine::SenseVoice {
-        CANTONESE_LANGUAGE.into()
-    } else if m.english_only {
-        "en".into()
-    } else {
-        chosen.to_string()
-    }
+/// What the engine is told for this model ("en", "yue" or "zh").
+pub fn language_code(id: ModelId) -> &'static str {
+    info(id).language.code()
 }
 
-/// Whether the model has a fixed language (the Language picker is disabled).
-pub fn fixed_language(id: ModelId) -> bool {
-    let m = info(id);
-    m.english_only || m.engine == Engine::SenseVoice
-}
-
-/// "Fast · English (US)", or just the model name when the language is part of it.
-pub fn summary(id: ModelId, chosen: &str) -> String {
-    let m = info(id);
-    if m.engine == Engine::SenseVoice {
-        m.name.to_string()
-    } else {
-        format!(
-            "{} · {}",
-            m.name,
-            crate::settings::language_label(&effective_language(id, chosen))
-        )
-    }
-}
-
-/// Unpacks the files a SenseVoice model needs from its `.tar.bz2` into
-/// `dest` (flat). Anything else in the archive (test audio, README) is skipped.
-pub fn unpack_sensevoice(archive: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+/// Unpacks `files` (name, expected size) from a SenseVoice `.tar.bz2` into
+/// `dest` (flat), checking each size. Anything else in the archive (test
+/// audio, README) is skipped.
+pub fn unpack_files(archive: &std::path::Path, dest: &std::path::Path, files: &[(&str, u64)]) -> std::io::Result<()> {
     use std::io::{Error, ErrorKind};
     std::fs::create_dir_all(dest)?;
     let f = std::io::BufReader::new(std::fs::File::open(archive)?);
@@ -158,18 +179,33 @@ pub fn unpack_sensevoice(archive: &std::path::Path, dest: &std::path::Path) -> s
             continue;
         };
         // Only top-level files of the model folder: "<folder>/<name>".
-        if path.components().count() != 2 || !SENSEVOICE_FILES.contains(&name) {
+        let Some(&(_, size)) = files.iter().find(|(n, _)| *n == name) else {
+            continue;
+        };
+        if path.components().count() != 2 {
             continue;
         }
-        let mut out = std::fs::File::create(dest.join(name))?;
-        std::io::copy(&mut entry, &mut out)?;
+        let out_path = dest.join(name);
+        let mut out = std::fs::File::create(&out_path)?;
+        let written = std::io::copy(&mut entry, &mut out)?;
         out.sync_all()?;
+        if written != size {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("{name} is {written} bytes, expected {size}"),
+            ));
+        }
         found += 1;
     }
-    if found != SENSEVOICE_FILES.len() {
+    if found != files.len() {
         return Err(Error::new(ErrorKind::InvalidData, "the model archive is missing files"));
     }
     Ok(())
+}
+
+/// [`unpack_files`] with the SenseVoice model's files.
+pub fn unpack_sensevoice(archive: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    unpack_files(archive, dest, SENSEVOICE_FILES)
 }
 
 pub fn human_size(bytes: u64) -> String {
@@ -331,7 +367,25 @@ mod tests {
     fn catalog_complete() {
         assert_eq!(info(ModelId::Fast).file, "ggml-base.en-q5_1.bin");
         assert_eq!(info(ModelId::Accurate).file, "ggml-small.en.bin");
-        assert_eq!(info(ModelId::Multilingual).file, "ggml-base.bin");
+        let names: Vec<&str> = MODELS.iter().map(|m| m.name).collect();
+        assert_eq!(
+            names,
+            [
+                "English · Fast",
+                "English · Accurate",
+                "Cantonese (粵語)",
+                "Mandarin (普通话)"
+            ]
+        );
+        assert_eq!(info(ModelId::Fast).description, "Quickest. Great for everyday texts.");
+        assert_eq!(
+            info(ModelId::Accurate).description,
+            "Better with names and long messages."
+        );
+        assert_eq!(
+            info(ModelId::Mandarin).description,
+            "Mandarin with English mixed in. Writes in simplified characters."
+        );
         for m in MODELS {
             assert_eq!(m.sha256.len(), 64);
             match m.engine {
@@ -360,14 +414,33 @@ mod tests {
     }
 
     #[test]
-    fn english_models_force_english() {
-        assert_eq!(effective_language(ModelId::Fast, "de"), "en");
-        assert_eq!(effective_language(ModelId::Multilingual, "de"), "de");
-        assert_eq!(effective_language(ModelId::Cantonese, "en"), "yue");
-        assert!(fixed_language(ModelId::Cantonese) && fixed_language(ModelId::Fast));
-        assert!(!fixed_language(ModelId::Multilingual));
-        assert_eq!(summary(ModelId::Fast, "de"), "Fast · English (US)");
-        assert_eq!(summary(ModelId::Cantonese, "en"), "Cantonese (粵語)");
+    fn the_model_decides_language_and_cleanup_mode() {
+        let cases = [
+            (ModelId::Fast, "en", PromptMode::Standard),
+            (ModelId::Accurate, "en", PromptMode::Standard),
+            (ModelId::Cantonese, "yue", PromptMode::Cantonese),
+            (ModelId::Mandarin, "zh", PromptMode::Mandarin),
+        ];
+        for (id, code, mode) in cases {
+            assert_eq!(language_code(id), code);
+            assert_eq!(info(id).language.prompt_mode(), mode);
+        }
+    }
+
+    #[test]
+    fn cantonese_and_mandarin_share_one_download() {
+        let (c, m) = (info(ModelId::Cantonese), info(ModelId::Mandarin));
+        assert_eq!(
+            (c.file, c.archive, c.size, c.sha256),
+            (m.file, m.archive, m.size, m.sha256)
+        );
+        assert_eq!(sharing_files(ModelId::Cantonese), [ModelId::Mandarin]);
+        assert_eq!(sharing_files(ModelId::Mandarin), [ModelId::Cantonese]);
+        assert!(sharing_files(ModelId::Fast).is_empty());
+        assert_eq!(
+            SENSEVOICE_FILES,
+            [("model.int8.onnx", 237_115_547), ("tokens.txt", 315_894)]
+        );
     }
 
     #[test]
@@ -395,7 +468,15 @@ mod tests {
             t.into_inner().unwrap().finish().unwrap();
         }
         let out = dir.join("out");
-        unpack_sensevoice(&archive, &out).unwrap();
+        let files = [("model.int8.onnx", 4), ("tokens.txt", 3)];
+        unpack_files(&archive, &out, &files).unwrap();
+        // A file of the wrong size is rejected.
+        assert!(unpack_files(
+            &archive,
+            &dir.join("out3"),
+            &[("model.int8.onnx", 5), ("tokens.txt", 3)]
+        )
+        .is_err());
         let mut names: Vec<String> = std::fs::read_dir(&out)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -415,7 +496,7 @@ mod tests {
             t.append_data(&mut h, "m/tokens.txt", &b"t"[..]).unwrap();
             t.into_inner().unwrap().finish().unwrap();
         }
-        assert!(unpack_sensevoice(&bad, &dir.join("out2")).is_err());
+        assert!(unpack_files(&bad, &dir.join("out2"), &files).is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
 

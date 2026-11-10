@@ -202,7 +202,8 @@ mod tests {
     #[test]
     fn cantonese_block_matches_docs() {
         // docs/cantonese.md holds the copy shared with the Android app.
-        let doc = include_str!("../../../docs/cantonese.md");
+        // Windows checkouts may turn line endings into \r\n.
+        let doc = include_str!("../../../docs/cantonese.md").replace("\r\n", "\n");
         assert!(doc.contains(&format!("```text\n{CANTONESE_BLOCK}\n```")));
         assert!(CANTONESE_BLOCK.starts_with("--- CANTONESE MODE ---\n"));
         assert!(CANTONESE_BLOCK.ends_with("\n--- END CANTONESE MODE ---"));

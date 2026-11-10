@@ -67,7 +67,7 @@ pub fn build_system_prompt(style_notes: &str, entries: &[&Entry]) -> String {
     s
 }
 
-/// One dictionary line: term, sounds-like list, and note.
+/// One dictionary line: term, the wrong words it gets typed as, and note.
 pub fn format_entry(e: &Entry) -> String {
     let mut line = format!("- {}", e.term.trim());
     let sounds: Vec<&str> = e
@@ -77,7 +77,7 @@ pub fn format_entry(e: &Entry) -> String {
         .filter(|s| !s.is_empty())
         .collect();
     if !sounds.is_empty() {
-        line.push_str(&format!(" (sounds like: {})", sounds.join(", ")));
+        line.push_str(&format!(" (misheard as: {})", sounds.join(", ")));
     }
     let note = e.note.trim();
     if !note.is_empty() {
@@ -155,7 +155,7 @@ mod tests {
         assert!(style_at > CORE_PROMPT.len() - 1);
         assert!(dict_at > style_at);
         assert!(sys.contains("Use British spelling."));
-        assert!(sys.contains("- Sela (sounds like: salad, sella) — note: my daughter's name"));
+        assert!(sys.contains("- Sela (misheard as: salad, sella) — note: my daughter's name"));
     }
 
     #[test]

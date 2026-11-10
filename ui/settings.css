@@ -690,3 +690,21 @@ body.touring main {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.field > span {
+  font-size: 13px;
+  font-weight: 700;
+}
+.field small {
+  color: var(--text-2);
+  font-size: 12px;
+}
+.chips .muted.small {
+  align-self: center;
+  margin-right: 2px;
+}

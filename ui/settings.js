@@ -256,9 +256,14 @@ function pageCleanup() {
 function dictForm(e) {
   return `<div class="card stack" id="dict-form">
     <h3>${e ? "Edit term" : "Add term"}</h3>
-    <input type="text" id="f-term" placeholder="Term, e.g. Sela" value="${esc(e?.term)}">
-    <input type="text" id="f-sounds" placeholder="Sounds like, separated by commas, e.g. salad, sella" value="${esc((e?.soundsLike || []).join(", "))}">
-    <input type="text" id="f-note" placeholder="Context note, e.g. my daughter's name" value="${esc(e?.note)}">
+    <label class="field"><span>Correct spelling</span>
+      <input type="text" id="f-term" placeholder="What you want typed, e.g. Sela" value="${esc(e?.term)}"></label>
+    <label class="field"><span>Wirl types it as</span>
+      <input type="text" id="f-sounds" placeholder="The wrong words Wirl types instead, e.g. salad, Stella" value="${esc((e?.soundsLike || []).join(", "))}">
+      <small>Copy them from what Wirl actually typed. Separate with commas.</small></label>
+    <label class="field"><span>Only when <span class="muted">(optional)</span></span>
+      <input type="text" id="f-note" placeholder="e.g. my brother's name, not the verb" value="${esc(e?.note)}">
+      <small>Only needed if a wrong word is also a real word you sometimes mean.</small></label>
     ${ui.dictError ? `<div class="error-text">${esc(ui.dictError)}</div>` : ""}
     <div class="row"><button class="primary" data-act="dict-save">${e ? "Save" : "Add"}</button><button class="ghost" data-act="dict-cancel">Cancel</button></div>
   </div>`;
@@ -290,7 +295,7 @@ function pageDictionary() {
               .map(
                 (e) => `<div class="dict-row">
           <div class="grow"><div class="term">${esc(e.term)}</div>
-            ${e.soundsLike.length ? `<div class="chips">${e.soundsLike.map((x) => `<span class="chip">${esc(x)}</span>`).join("")}</div>` : ""}
+            ${e.soundsLike.length ? `<div class="chips"><span class="muted small">typed as</span>${e.soundsLike.map((x) => `<span class="chip">${esc(x)}</span>`).join("")}</div>` : ""}
             ${e.note ? `<div class="muted small" style="margin-top:6px">${esc(e.note)}</div>` : ""}</div>
           <button class="ghost" data-act="dict-edit" data-id="${e.id}">Edit</button>
           <button class="ghost" data-act="dict-delete" data-id="${e.id}">Delete</button>

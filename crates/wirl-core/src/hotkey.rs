@@ -19,6 +19,8 @@ pub enum Action {
     Dictate,
     Cancel,
     CleanSelection,
+    /// Quick switch: the next speech model ticked in Settings › Dictation.
+    SwitchModel,
 }
 
 impl Action {
@@ -27,6 +29,7 @@ impl Action {
             Action::Dictate => "Dictate",
             Action::Cancel => "Cancel",
             Action::CleanSelection => "Clean up selection",
+            Action::SwitchModel => "Switch speech model",
         }
     }
 }
@@ -36,6 +39,7 @@ pub fn default_for(action: Action) -> Hotkey {
         Action::Dictate => Hotkey::parse("Ctrl+Alt+Space").unwrap(),
         Action::Cancel => Hotkey::parse("Esc").unwrap(),
         Action::CleanSelection => Hotkey::parse("Ctrl+Alt+C").unwrap(),
+        Action::SwitchModel => Hotkey::parse("Ctrl+Alt+M").unwrap(),
     }
 }
 
@@ -461,6 +465,7 @@ enum TState {
 }
 
 /// Turns Dictate key presses/releases into start/stop decisions.
+#[derive(Debug, Clone)]
 pub struct DictateTrigger {
     pub hold_to_talk: bool,
     state: TState,

@@ -22,6 +22,7 @@ fn action_key(a: Action) -> &'static str {
         Action::Dictate => "dictate",
         Action::Cancel => "cancel",
         Action::CleanSelection => "cleanSelection",
+        Action::SwitchModel => "switchModel",
     }
 }
 
@@ -44,6 +45,9 @@ pub fn get_state() -> Value {
                 "shared": shared,
                 "ready": a.model_ready(m.id),
                 "partial": a.model_partial(m.id), "total": m.size,
+                "inUse": s.model == m.id,
+                "ticked": models::cycle::ticked_with_current(&s.quick_switch, s.model).contains(&m.id),
+                "tag": m.tag,
                 "download": d,
             })
         })
@@ -93,6 +97,7 @@ pub fn get_state() -> Value {
             "dictate": s.hotkeys.dictate.to_string(),
             "cancel": s.hotkeys.cancel.to_string(),
             "cleanSelection": s.hotkeys.clean_selection.to_string(),
+            "switchModel": s.hotkeys.switch_model.to_string(),
             "conflicts": conflicts,
         },
         "icons": icons,
@@ -157,7 +162,8 @@ pub fn update_settings(app: AppHandle, patch: Value) -> CmdResult<()> {
     Ok(())
 }
 
-/// Loads the model if downloaded, otherwise starts the download.
+/// Loads the model if it's downloaded. Picking a model never starts a
+/// download; only the Download button does (same as Android).
 pub fn ensure_model(id: ModelId) {
     let a = app::get();
     if a.model_ready(id) {
@@ -170,9 +176,56 @@ pub fn ensure_model(id: ModelId) {
                 log::error!("load model: {e}");
             }
         });
-    } else {
-        let _ = download_model(id);
     }
+}
+
+/// "Use now": makes a downloaded model the one dictation uses (and ticks it
+/// for quick switch).
+#[tauri::command]
+pub fn use_model(id: ModelId) -> CmdResult<()> {
+    let a = app::get();
+    if !a.model_ready(id) {
+        return Err("Download this model first.".into());
+    }
+    {
+        let mut s = a.settings.write();
+        let ticked = models::cycle::ticked_with_current(&s.quick_switch, s.model);
+        s.quick_switch = models::cycle::ticked_with_current(&ticked, id);
+        s.model = id;
+    }
+    a.save_settings();
+    ensure_model(id);
+    a.notify();
+    tray::refresh();
+    Ok(())
+}
+
+/// Ticks a model on or off for quick switch. Only downloaded models can be
+/// ticked, and one always stays ticked; unticking the one in use moves to
+/// the next ticked model.
+#[tauri::command]
+pub fn set_quick_switch(id: ModelId, on: bool) -> CmdResult<()> {
+    let a = app::get();
+    if on && !a.model_ready(id) {
+        return Err("Download this model first.".into());
+    }
+    let changed_model = {
+        let mut s = a.settings.write();
+        let ready = |m: ModelId| a.model_ready(m);
+        let (ticked, current) =
+            models::cycle::toggle(&s.quick_switch, s.model, ready, id, on).ok_or("Keep at least one model ticked.")?;
+        let changed = current != s.model;
+        s.quick_switch = ticked;
+        s.model = current;
+        changed.then_some(current)
+    };
+    a.save_settings();
+    if let Some(m) = changed_model {
+        ensure_model(m);
+    }
+    a.notify();
+    tray::refresh();
+    Ok(())
 }
 
 /// Downloads a model's files. Models that share files (Cantonese and
@@ -239,11 +292,22 @@ pub fn download_model(id: ModelId) -> CmdResult<()> {
         a.notify();
         match r {
             Ok(_) => {
-                // The chosen model may be this one or one sharing its files.
-                let chosen = a.settings().model;
+                // A finished download ticks its model for quick switch, and
+                // becomes the model in use if that one isn't downloaded.
+                let chosen = {
+                    let mut s = a.settings.write();
+                    s.quick_switch = models::cycle::ticked_with_current(&s.quick_switch, id);
+                    if !a.model_ready(s.model) {
+                        s.model = id;
+                    }
+                    s.model
+                };
+                a.save_settings();
+                // The model in use may be this one or one sharing its files.
                 if models::info(chosen).file == file {
                     ensure_model(chosen);
                 }
+                a.notify();
             }
             Err(e) => log::warn!("download {}: {e}", info.file),
         }
@@ -293,6 +357,13 @@ pub async fn delete_model(id: ModelId) -> CmdResult<()> {
     .map_err(|e| e.to_string())?
     .map_err(|e| format!("Couldn't delete the model: {e}"))?;
     a.downloads.lock().remove(info.file);
+    // Deleting unticks it (and the model sharing its files).
+    {
+        let mut s = a.settings.write();
+        let gone: Vec<ModelId> = std::iter::once(id).chain(models::sharing_files(id)).collect();
+        s.quick_switch.retain(|m| !gone.contains(m));
+    }
+    a.save_settings();
     a.log_diag(DiagEntry::new(
         DiagKind::Info,
         format!("Deleted the {} model", info.name),
@@ -497,7 +568,12 @@ pub fn hotkeys_reset() {
     let a = app::get();
     {
         let mut s = a.settings.write();
-        for act in [Action::Dictate, Action::Cancel, Action::CleanSelection] {
+        for act in [
+            Action::Dictate,
+            Action::Cancel,
+            Action::CleanSelection,
+            Action::SwitchModel,
+        ] {
             s.hotkeys.set(act, default_for(act));
         }
     }

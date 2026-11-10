@@ -1,5 +1,5 @@
-//! Global hotkeys. Dictate and Clean up selection are registered while Wirl
-//! is on; Cancel only while recording. Registration failures mean another
+//! Global hotkeys. Dictate, Clean up selection and Switch speech model are
+//! registered while Wirl is on; Cancel only while recording. Registration failures mean another
 //! app owns the combination and are shown as amber warnings.
 
 use crate::app;
@@ -31,6 +31,7 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
                 (Action::Dictate, ShortcutState::Released) => dictation::on_dictate_released(),
                 (Action::Cancel, ShortcutState::Pressed) => dictation::cancel(),
                 (Action::CleanSelection, ShortcutState::Pressed) => dictation::on_clean_selection(),
+                (Action::SwitchModel, ShortcutState::Pressed) => dictation::on_switch_model(),
                 _ => {}
             }
         })
@@ -72,7 +73,7 @@ pub fn register_all() {
         }
     }
     if s.enabled && !a.capturing_hotkey.load(Ordering::Relaxed) {
-        for action in [Action::Dictate, Action::CleanSelection] {
+        for action in [Action::Dictate, Action::CleanSelection, Action::SwitchModel] {
             let h = s.hotkeys.get(action);
             if let Err(e) = register_one(&app, action, h) {
                 log::warn!("register {h}: {e}");

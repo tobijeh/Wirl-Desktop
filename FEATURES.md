@@ -25,6 +25,7 @@ Status per platform.
 | | Multilingual removed; settings migration (version 2) moves its users to English · Fast and deletes its file | ✅ | 🔵 |
 | | On-demand download with size, progress, Cancel (keeps the partial file, Resume continues), SHA-256 check, Delete | ✅ | 🔵 |
 | | Amber "not downloaded yet" note on the chosen model's row | ✅ | 🔵 |
+| | Quick switch: tick several downloaded models; the Switch speech model hotkey (Ctrl+Alt+M) moves between them, even while recording (restarts in the new model), and the pill shows the tag (EN, EN+, 粵, 普) for a moment; clicking a row never downloads, "Use now" picks the model | ✅ logic / 🟢 Windows | 🔵 swipe on the bubble (#62) |
 | | Active model kept loaded | 🟢 | ❔ |
 | | **Cantonese (粵語)** and **Mandarin (普通话)**: SenseVoice through sherpa-onnx 2.0.1 in its own sidecar, language `yue` / `zh`, mixed with English (docs/cantonese.md, docs/mandarin.md) | ✅ logic, verified on Linux / 🟢 Windows | 🔵 |
 | | One SenseVoice download (166 MB, size + SHA-256, unpacked with sizes checked) serves both; Delete removes both after a warning | ✅ | 🔵 |
@@ -39,7 +40,7 @@ Status per platform.
 | | Quality test set (38 cases incl. 6 Cantonese and 6 Mandarin, manual) | ✅ | 🔵 |
 | **Clean up selection** | Copy → clean → paste back | 🟢 | ⬜ |
 | | Press again to undo while unchanged; editing resets | ✅ logic / 🟢 Windows | ⬜ |
-| **Hotkeys** | Dictate (Ctrl+Alt+Space), Cancel (Esc, recording only), Clean up (Ctrl+Alt+C) | 🟢 | ⬜ |
+| **Hotkeys** | Dictate (Ctrl+Alt+Space), Cancel (Esc, recording only), Clean up (Ctrl+Alt+C), Switch speech model (Ctrl+Alt+M) | 🟢 | ⬜ |
 | | Hold to talk / tap to toggle | ✅ | ⬜ |
 | | Record a new shortcut ("Press new keys…") | ✅ logic / 🟢 UI | ⬜ |
 | | Conflict warnings (Windows, common apps, other apps, Wirl's own) | ✅ | ⬜ |

@@ -36,8 +36,20 @@ impl PillSize {
 pub enum PillState {
     Hidden,
     /// The selected icon (plain), live level wave, "Esc to cancel".
+    /// Right after a quick switch, `tag` (EN, EN+, 粵, 普) shows in place of
+    /// the icon and the hint names the model, for [`TAG_FLASH_MS`].
     Recording {
         cancel_hint: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
+    },
+    /// Quick switch while not recording: the new model's tag and name,
+    /// briefly. `note` explains when there was nothing to switch to.
+    ModelSwitched {
+        tag: String,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     /// Spinner, "Cleaning up".
     Processing,
@@ -75,12 +87,34 @@ impl PillState {
             PillState::Copied => Some(4_000),
             PillState::Error { .. } => Some(3_500),
             PillState::InsertedWithTip { .. } => Some(6_000),
+            PillState::ModelSwitched { note: None, .. } => Some(1_400),
+            PillState::ModelSwitched { note: Some(_), .. } => Some(2_800),
         }
     }
 
     pub fn recording(cancel_hotkey: &str) -> Self {
         PillState::Recording {
             cancel_hint: format!("{cancel_hotkey} to cancel"),
+            tag: None,
+        }
+    }
+
+    /// Recording, right after a quick switch: the model's tag in place of
+    /// the icon and its name in place of the cancel hint.
+    pub fn recording_switched(tag: &str, name: &str) -> Self {
+        PillState::Recording {
+            cancel_hint: name.to_string(),
+            tag: Some(tag.to_string()),
+        }
+    }
+
+    /// Quick switch while idle. `only_one`: nothing else is ticked, so the
+    /// model stays the same and the pill says how to add more.
+    pub fn model_switched(tag: &str, name: &str, only_one: bool) -> Self {
+        PillState::ModelSwitched {
+            tag: tag.to_string(),
+            name: name.to_string(),
+            note: only_one.then(|| "Tick more models to switch".to_string()),
         }
     }
 
@@ -113,6 +147,9 @@ impl PillState {
 
 /// Applies the status-message preference: with messages off, success
 /// confirmations become Hidden; errors and "Copied" still show.
+/// How long the tag shows on the recording pill after a quick switch.
+pub const TAG_FLASH_MS: u64 = 1_200;
+
 pub fn effective_state(state: PillState, status_messages: bool) -> PillState {
     if !status_messages && state.is_status_message() {
         PillState::Hidden
@@ -158,6 +195,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn quick_switch_states() {
+        let r = PillState::recording_switched("粵", "Cantonese (粵語)");
+        assert_eq!(r.auto_hide_ms(), None, "still recording");
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains(r#""tag":"粵""#), "{json}");
+        assert!(!serde_json::to_string(&PillState::recording("Esc"))
+            .unwrap()
+            .contains("tag"));
+        let m = PillState::model_switched("普", "Mandarin (普通话)", false);
+        assert_eq!(m.auto_hide_ms(), Some(1_400));
+        // Always shown: it answers a key the user just pressed.
+        assert_eq!(effective_state(m.clone(), false), m);
+        let one = PillState::model_switched("EN", "English · Fast", true);
+        assert!(matches!(one, PillState::ModelSwitched { note: Some(_), .. }));
+    }
+
+    #[test]
     fn hidden_when_idle() {
         assert!(!PillState::Hidden.visible());
         assert!(PillState::Processing.visible());
@@ -183,7 +237,8 @@ mod tests {
         assert_eq!(
             PillState::recording("Esc"),
             PillState::Recording {
-                cancel_hint: "Esc to cancel".into()
+                cancel_hint: "Esc to cancel".into(),
+                tag: None,
             }
         );
     }

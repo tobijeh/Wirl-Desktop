@@ -71,6 +71,8 @@ pub fn run() {
             commands::download_model,
             commands::cancel_download,
             commands::delete_model,
+            commands::use_model,
+            commands::set_quick_switch,
             commands::set_api_key,
             commands::clear_api_key,
             commands::dict_add,

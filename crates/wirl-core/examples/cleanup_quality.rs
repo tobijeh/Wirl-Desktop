@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use wirl_core::claude::ClaudeClient;
 use wirl_core::dictionary::{Dictionary, Entry};
+use wirl_core::prompt::PromptMode;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +33,9 @@ struct Case {
     input: String,
     #[serde(default)]
     style: String,
+    /// The input came from the Cantonese model (adds the Cantonese block).
+    #[serde(default)]
+    cantonese: bool,
     #[serde(default)]
     dictionary: Vec<DictItem>,
     #[serde(default)]
@@ -106,8 +110,13 @@ async fn main() {
         }
         // Same relevance filter the app uses.
         let entries: Vec<&Entry> = dict.matching(&c.input);
+        let mode = if c.cantonese {
+            PromptMode::Cantonese
+        } else {
+            PromptMode::Standard
+        };
         match client
-            .cleanup(&key, &c.input, &c.style, &entries, Duration::from_secs(30))
+            .cleanup(&key, mode, &c.input, &c.style, &entries, Duration::from_secs(30))
             .await
         {
             Ok(r) => {

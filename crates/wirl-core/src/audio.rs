@@ -291,11 +291,22 @@ impl Chunker {
 pub fn assemble(parts: &[(usize, String)]) -> String {
     let mut v: Vec<&(usize, String)> = parts.iter().collect();
     v.sort_by_key(|p| p.0);
-    v.iter()
-        .map(|p| p.1.trim())
-        .filter(|t| !t.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut out = String::new();
+    for t in v.iter().map(|p| p.1.trim()).filter(|t| !t.is_empty()) {
+        // Chinese and Japanese text has no spaces between words.
+        let tight = out.chars().next_back().is_some_and(is_cjk) || t.chars().next().is_some_and(is_cjk);
+        if !out.is_empty() && !tight {
+            out.push(' ');
+        }
+        out.push_str(t);
+    }
+    out
+}
+
+/// Characters written without spaces around them: Chinese characters, kana
+/// and full-width punctuation.
+fn is_cjk(c: char) -> bool {
+    crate::dictionary::is_han(c) || matches!(c, '\u{3000}'..='\u{30FF}' | '\u{FF00}'..='\u{FFEF}')
 }
 
 #[cfg(test)]
@@ -308,6 +319,20 @@ mod tests {
     }
     fn silence(ms: usize) -> Vec<f32> {
         vec![0.0; ms * SAMPLE_RATE / 1000]
+    }
+
+    #[test]
+    fn assemble_joins_in_order_without_spaces_in_chinese() {
+        let parts = vec![(1, " world ".to_string()), (0, "hello".into()), (2, "".into())];
+        assert_eq!(assemble(&parts), "hello world");
+        let zh = vec![
+            (1, "之后要 SEND 个 EMAIL".to_string()),
+            (0, "我今日有个 MEETING".into()),
+            (2, "OK".into()),
+        ];
+        assert_eq!(assemble(&zh), "我今日有个 MEETING之后要 SEND 个 EMAIL OK");
+        let zh2 = vec![(0, "你好。".to_string()), (1, "我系".into())];
+        assert_eq!(assemble(&zh2), "你好。我系");
     }
 
     #[test]

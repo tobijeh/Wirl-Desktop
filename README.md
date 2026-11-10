@@ -2,7 +2,7 @@
 
 Wirl lives in your system tray. Press a hotkey in any text box, talk, and Wirl types what you meant:
 
-1. **Whisper** turns your speech into text **on your computer** (whisper.cpp, GPU via Vulkan when available).
+1. **Whisper** turns your speech into text **on your computer** (whisper.cpp, GPU via Vulkan when available). For Cantonese, pick the **Cantonese (粵語)** model: it uses SenseVoice (sherpa-onnx), also on your computer. See [docs/cantonese.md](docs/cantonese.md).
 2. **Claude** tidies it up: removes "um", follows "scratch that", fixes misheard words, and spells your names right.
 3. Wirl **pastes** the result where your cursor is, then puts your clipboard back.
 
@@ -56,9 +56,9 @@ Requirements: Windows 10/11 x64, [Rust](https://rustup.rs) (MSVC), Node.js 22, C
 ```powershell
 npm ci
 cargo run -p wirl-icons -- all              # imports the icons (sheet or zip) if needed and builds app icons
-./scripts/build-sidecars.ps1                # Whisper sidecars (add -CpuOnly to skip Vulkan)
+./scripts/build-sidecars.ps1                # speech sidecars (add -CpuOnly to skip Vulkan)
 npm run tauri dev                           # run
-cargo test --workspace --exclude wirl-whisper
+cargo test --workspace --exclude wirl-whisper --exclude wirl-sensevoice
 ```
 
 The icons are used exactly as provided. They come from `wirl-icons-sheet.png`, a 5×5 sheet: `cargo run -p wirl-icons -- slice` copies each 128×128 icon out of it pixel for pixel into `ui/assets/icons/` and writes `icons.json` (order as on the sheet, default `swirl`). These files are committed. A `wirl-icons.zip`, if added, is unzipped there instead (then deleted). `generate` only scales the default icon into the `.ico`/`.png` sizes Windows needs.
@@ -70,7 +70,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."     # only in this PowerShell window; neve
 cargo run -p wirl-core --example cleanup_quality
 ```
 
-It runs 26 cases from `tests/quality/cases.json` (self-corrections, restarts, spoken commands, sound-alikes, dictionary terms, unchanged clean text, casual tone) through the exact same request the app sends. It is never run in GitHub Actions.
+It runs 31 cases from `tests/quality/cases.json` (self-corrections, restarts, spoken commands, sound-alikes, dictionary terms, unchanged clean text, casual tone, and Cantonese mixed with English) through the exact same request the app sends. It is never run in GitHub Actions.
 
 ## Layout
 
@@ -78,6 +78,7 @@ It runs 26 cases from `tests/quality/cases.json` (self-corrections, restarts, sp
 |---|---|
 | `crates/wirl-core` | All platform-independent logic, unit tested: cleanup prompt and request, Claude client, dictionary and matching, sync keys, encryption, merge and the relay client, VAD chunking and `audio_ctx`, hotkeys, pill states, clipboard insert/undo logic, settings |
 | `crates/wirl-whisper` | The Whisper sidecar process |
+| `crates/wirl-sensevoice` | The SenseVoice sidecar process (Cantonese model) |
 | `crates/wirl-icons` | Icon import and `.ico` generation |
 | `src-tauri` | The Tauri app: tray, hotkeys, audio, pill window, Windows integration, phone sync, updater |
 | `ui` | Settings window and pill (plain HTML/CSS/JS, Manrope font bundled) |

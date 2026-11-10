@@ -24,6 +24,8 @@ Status per platform.
 | | On-demand download from Hugging Face with progress, resume, SHA-256 check | ✅ | ❔ |
 | | Active model kept loaded | 🟢 | ❔ |
 | | Language picker | 🟢 | ❔ |
+| | **Cantonese (粵語)**: SenseVoice through sherpa-onnx in its own sidecar, language `yue`, Cantonese mixed with English (docs/cantonese.md) | ✅ logic, verified on Linux / 🟢 Windows | 🔵 |
+| | Cantonese model downloaded in the app (166 MB, SHA-256, unpacked), "download first" message | ✅ | 🔵 |
 | **AI cleanup** | Claude Haiku 5.5, thinking off, exact built-in prompt | ✅ | 🔵 same app family |
 | | Personal style notes | ✅ | ❔ |
 | | Only plausibly matching dictionary entries sent | ✅ | ❔ |
@@ -31,7 +33,8 @@ Status per platform.
 | | Raw-text fallback with plain reason | ✅ | ❔ |
 | | Line breaks and lists preserved | ✅ | ❔ |
 | | Own API key, stored in the OS credential store | 🟢 Windows Credential Manager | ❔ |
-| | Quality test set (26 cases, manual) | ✅ | ❔ |
+| | Cantonese mode block added to the prompt (same text as Android) | ✅ | 🔵 |
+| | Quality test set (31 cases incl. Cantonese, manual) | ✅ | ❔ |
 | **Clean up selection** | Copy → clean → paste back | 🟢 | ⬜ |
 | | Press again to undo while unchanged; editing resets | ✅ logic / 🟢 Windows | ⬜ |
 | **Hotkeys** | Dictate (Ctrl+Alt+Space), Cancel (Esc, recording only), Clean up (Ctrl+Alt+C) | 🟢 | ⬜ |

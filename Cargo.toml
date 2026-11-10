@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/wirl-core", "crates/wirl-whisper", "crates/wirl-icons", "src-tauri"]
+members = ["crates/wirl-core", "crates/wirl-whisper", "crates/wirl-sensevoice", "crates/wirl-icons", "src-tauri"]
 default-members = ["crates/wirl-core", "crates/wirl-icons"]
 
 [workspace.package]

@@ -15,10 +15,10 @@ use wirl_core::diagnostics::{DiagEntry, DiagKind};
 use wirl_core::hotkey::TriggerOutput;
 use wirl_core::insert::{insert_text, CleanDecision, InsertOutcome, PasteError};
 use wirl_core::ipc::initial_prompt;
-use wirl_core::models;
+use wirl_core::models::{self, Engine};
 use wirl_core::pill::PillState;
 use wirl_core::pipeline::{self, Final};
-use wirl_core::prompt::CLEANUP_MODEL;
+use wirl_core::prompt::{PromptMode, CLEANUP_MODEL};
 
 /// Longest single dictation before Wirl stops on its own.
 const MAX_RECORDING: Duration = Duration::from_secs(10 * 60);
@@ -115,17 +115,18 @@ async fn start() -> Result<(), String> {
     }
     let session = a.session.fetch_add(1, Ordering::SeqCst) + 1;
     let model_path = a.model_path(s.model);
-    if !model_path.exists() {
+    if !a.model_ready(s.model) {
         reset_to_idle(&a);
-        show_error("Download a speech model in Setup");
+        show_error(format!("Download the {} model first", models::info(s.model).name));
         tray::refresh();
         return Err("no model".into());
     }
     // Make sure the model is (still) loaded; this is quick when it is.
     let sc = a.sidecar.clone();
     let mp = model_path.to_string_lossy().to_string();
+    let engine = models::info(s.model).engine;
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = sc.load(&mp).await {
+        if let Err(e) = sc.load(engine, &mp).await {
             log::error!("model load: {e}");
         }
     });
@@ -315,11 +316,16 @@ async fn run_session(
         DiagKind::Dictation,
         format!("{:.1} s dictation, {} chunks", duration_ms as f64 / 1000.0, chunk_count),
     );
-    diag.model = Some(models::info(s.model).name.to_string());
+    let model = models::info(s.model);
+    let engine_name = match model.engine {
+        Engine::Whisper => "Whisper",
+        Engine::SenseVoice => "SenseVoice",
+    };
+    diag.model = Some(model.name.to_string());
     for r in &results {
-        diag.push_stage(format!("Whisper chunk {}", r.index + 1), r.ms);
+        diag.push_stage(format!("{engine_name} chunk {}", r.index + 1), r.ms);
     }
-    diag.push_stage("Whisper after stop", tail_ms);
+    diag.push_stage(format!("{engine_name} after stop"), tail_ms);
     let errors: Vec<String> = results.iter().filter_map(|r| r.error.clone()).collect();
     let parts: Vec<(usize, String)> = results.iter().map(|r| (r.index, r.text.clone())).collect();
     let joined = assemble(&parts);
@@ -342,12 +348,27 @@ async fn run_session(
     let cleanup = if s.cleanup_enabled {
         diag.thinking = Some(false);
         let key = a.api_key.read().clone().unwrap_or_default();
-        let entries_owned: Vec<_> = a.dict.lock().matching(&raw).into_iter().cloned().collect();
+        // Cantonese mode when the Cantonese model produced the transcript.
+        let mode = match model.engine {
+            Engine::SenseVoice => PromptMode::Cantonese,
+            Engine::Whisper => PromptMode::Standard,
+        };
+        let entries_owned: Vec<_> = {
+            let d = a.dict.lock();
+            match mode {
+                PromptMode::Cantonese => d.matching_cantonese(&raw),
+                PromptMode::Standard => d.matching(&raw),
+            }
+            .into_iter()
+            .cloned()
+            .collect()
+        };
         let entries: Vec<&_> = entries_owned.iter().collect();
         let r = a
             .claude
             .cleanup(
                 &key,
+                mode,
                 &raw,
                 &s.style_notes,
                 &entries,
@@ -526,6 +547,7 @@ async fn clean_selection(a: Arc<App>, session: u64) {
                 .claude
                 .cleanup(
                     &key,
+                    PromptMode::Standard,
                     &original,
                     &s.style_notes,
                     &entries,

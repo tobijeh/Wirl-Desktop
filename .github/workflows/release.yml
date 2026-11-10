@@ -93,7 +93,7 @@ jobs:
           if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress }
           ninja --version
 
-      - name: Whisper sidecars
+      - name: Speech sidecars (Whisper Vulkan + CPU, SenseVoice)
         env:
           CMAKE_GENERATOR: Ninja
           # Short build folder: the Vulkan build's nested paths pass the Windows path limit under D:\a\...

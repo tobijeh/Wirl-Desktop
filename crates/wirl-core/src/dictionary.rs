@@ -167,6 +167,19 @@ impl Dictionary {
             .collect()
     }
 
+    /// Like [`matching`](Self::matching), for a transcript from the Cantonese
+    /// model. That model writes simplified characters while people type their
+    /// entries in traditional ones, so entries written in Chinese characters
+    /// are always included (Claude checks whether they apply).
+    pub fn matching_cantonese(&self, transcript: &str) -> Vec<&Entry> {
+        let words = tokenize(transcript);
+        let lower = transcript.to_lowercase();
+        self.visible()
+            .into_iter()
+            .filter(|e| entry_matches(e, &lower, &words) || has_han(e))
+            .collect()
+    }
+
     /// Imports JSON (sync entry format, or simple {term, soundsLike, note}
     /// objects) and merges by term. Returns how many terms were added/updated.
     pub fn import_json(&mut self, json: &str) -> Result<ImportSummary, String> {
@@ -426,6 +439,18 @@ fn keys_match(a: &str, b: &str) -> bool {
     short.len() >= 2 && long.len() - short.len() <= 1 && long.starts_with(short)
 }
 
+/// Whether the entry's term or wrong spellings contain Chinese characters.
+fn has_han(e: &Entry) -> bool {
+    std::iter::once(&e.term)
+        .chain(e.sounds_like.iter())
+        .any(|p| p.chars().any(is_han))
+}
+
+/// CJK Unified Ideographs (with extension A and compatibility ideographs).
+pub fn is_han(c: char) -> bool {
+    matches!(c, '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}' | '\u{F900}'..='\u{FAFF}' | '\u{20000}'..='\u{3134F}')
+}
+
 fn entry_matches(e: &Entry, lower_text: &str, words: &[String]) -> bool {
     let phrases = std::iter::once(&e.term).chain(e.sounds_like.iter());
     for p in phrases {
@@ -466,6 +491,22 @@ fn entry_matches(e: &Entry, lower_text: &str, words: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cantonese_matching_includes_chinese_entries() {
+        let mut d = Dictionary::default();
+        d.add("陳太", vec!["陈太".into()], "").unwrap();
+        d.add("Sela", vec!["salad".into()], "").unwrap();
+        d.add("Wirl", vec![], "").unwrap();
+        let raw = "听日同 SALAD 去饮茶";
+        let terms = |v: Vec<&Entry>| v.iter().map(|e| e.term.clone()).collect::<Vec<_>>();
+        assert_eq!(terms(d.matching(raw)), ["Sela"]);
+        let mut c = terms(d.matching_cantonese(raw));
+        c.sort();
+        assert_eq!(c, ["Sela", "陳太"]);
+        // Chinese text alone never matches Latin entries by sound.
+        assert!(d.matching("我哋喺度").is_empty());
+    }
 
     fn dict(entries: &[(&str, &[&str], &str)]) -> Dictionary {
         let mut d = Dictionary::default();

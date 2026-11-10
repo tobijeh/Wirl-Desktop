@@ -238,6 +238,19 @@ mod tests {
     }
 
     #[test]
+    fn chinese_text_goes_through_the_clipboard_unchanged() {
+        // Cantonese mode: characters are pasted, never typed key by key.
+        let mut m = Mock {
+            clipboard: Some("old".into()),
+            ..Default::default()
+        };
+        let text = "我今日下晝有個 meeting，之後要 send 個 email 俾老闆㗎。";
+        assert_eq!(insert_text(&mut m, text), InsertOutcome::Pasted { restored: true });
+        assert_eq!(m.pasted, vec![text]);
+        assert_eq!(m.clipboard.as_deref(), Some("old"));
+    }
+
+    #[test]
     fn does_not_clobber_newer_clipboard() {
         let mut m = Mock {
             clipboard: Some("old".into()),

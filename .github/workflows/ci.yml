@@ -53,15 +53,16 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
-          foreach ($n in "wirl-whisper", "wirl-whisper-cpu") {
+          foreach ($n in "wirl-whisper", "wirl-whisper-cpu", "wirl-sensevoice") {
             New-Item -ItemType File -Force -Path "src-tauri/binaries/$n-x86_64-pc-windows-msvc.exe" | Out-Null
           }
 
+      # The sidecars are checked in the build job, where they're built.
       - name: Clippy
-        run: cargo clippy --workspace --exclude wirl-whisper --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude wirl-whisper --exclude wirl-sensevoice --all-targets -- -D warnings
 
       - name: Unit tests
-        run: cargo test --workspace --exclude wirl-whisper
+        run: cargo test --workspace --exclude wirl-whisper --exclude wirl-sensevoice
 
   build:
     name: Windows build
@@ -103,7 +104,7 @@ jobs:
           if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress }
           ninja --version
 
-      - name: Whisper sidecars (Release, AVX2, Vulkan + CPU)
+      - name: Speech sidecars (Whisper Vulkan + CPU, SenseVoice)
         env:
           CMAKE_GENERATOR: Ninja
           # Short build folder: the Vulkan build's nested paths pass the Windows path limit under D:\a\...
@@ -115,6 +116,38 @@ jobs:
         env:
           CMAKE_GENERATOR: Ninja
         run: cargo clippy -p wirl-whisper --target x86_64-pc-windows-msvc --target-dir C:\s\cpu -- -D warnings
+
+      - name: Sidecar check (SenseVoice clippy)
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo clippy -p wirl-sensevoice --target x86_64-pc-windows-msvc --target-dir C:\s\sv -- -D warnings
+
+      # The SenseVoice sidecar must start on its own (no missing DLLs) and
+      # answer the protocol: send a ping, expect "ready" and "pong".
+      - name: Sidecar smoke test (SenseVoice starts without DLLs)
+        shell: pwsh
+        run: |
+          $exe = "src-tauri/binaries/wirl-sensevoice-x86_64-pc-windows-msvc.exe"
+          $out = '{"type":"ping","id":7}' | & $exe
+          if ($LASTEXITCODE -ne 0) { throw "wirl-sensevoice exited with $LASTEXITCODE" }
+          Write-Host $out
+          if (-not ($out -match '"type":"ready"') -or -not ($out -match '"type":"pong","id":7')) { throw "unexpected output" }
+          & dumpbin /dependents $exe
+
+      # Real recognition on Windows with the official model and one of its test clips.
+      - name: Sidecar smoke test (SenseVoice recognises Cantonese)
+        shell: pwsh
+        run: |
+          $name = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09"
+          Invoke-WebRequest "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$name.tar.bz2" -OutFile "$env:RUNNER_TEMP/sv.tar.bz2"
+          $hash = (Get-FileHash "$env:RUNNER_TEMP/sv.tar.bz2" -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne "7305f7905bfcf77fa0b39388a313f3da35c68d971661a65475b56fb2162c8e63") { throw "model checksum changed: $hash" }
+          tar -xjf "$env:RUNNER_TEMP/sv.tar.bz2" -C $env:RUNNER_TEMP
+          $out = & src-tauri/binaries/wirl-sensevoice-x86_64-pc-windows-msvc.exe --model "$env:RUNNER_TEMP/$name" "$env:RUNNER_TEMP/$name/test_wavs/yue-0.wav"
+          if ($LASTEXITCODE -ne 0) { throw "wirl-sensevoice exited with $LASTEXITCODE" }
+          Write-Host $out
+          $text = ("$out" -split "`t")[2]
+          if (-not $text -or $text.Trim().Length -lt 4) { throw "no text recognised" }
 
       - run: npm ci
 

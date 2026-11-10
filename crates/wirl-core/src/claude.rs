@@ -2,7 +2,7 @@
 //! the time to first byte is measurable.
 
 use crate::dictionary::Entry;
-use crate::prompt::{build_request, build_system_prompt, postprocess_output, ANTHROPIC_VERSION};
+use crate::prompt::{build_request, build_system_prompt, postprocess_output, PromptMode, ANTHROPIC_VERSION};
 use futures_util::StreamExt;
 use std::time::{Duration, Instant};
 
@@ -124,6 +124,7 @@ impl ClaudeClient {
     pub async fn cleanup(
         &self,
         api_key: &str,
+        mode: PromptMode,
         text: &str,
         style_notes: &str,
         entries: &[&Entry],
@@ -132,7 +133,7 @@ impl ClaudeClient {
         if api_key.trim().is_empty() {
             return Err(CleanupError::NoKey);
         }
-        let system = build_system_prompt(style_notes, entries);
+        let system = build_system_prompt(mode, style_notes, entries);
         let body = build_request(&system, text, true);
         match tokio::time::timeout(timeout, self.send(api_key, &body)).await {
             Ok(r) => r,
@@ -300,7 +301,7 @@ mod tests {
     async fn empty_key_fails_fast() {
         let c = ClaudeClient::with_url("http://127.0.0.1:9/");
         let e = c
-            .cleanup("  ", "hi", "", &[], Duration::from_secs(1))
+            .cleanup("  ", PromptMode::Standard, "hi", "", &[], Duration::from_secs(1))
             .await
             .unwrap_err();
         assert_eq!(e, CleanupError::NoKey);
@@ -309,7 +310,10 @@ mod tests {
     #[tokio::test]
     async fn unreachable_host_is_no_internet() {
         let c = ClaudeClient::with_url("http://127.0.0.1:9/");
-        let e = c.cleanup("k", "hi", "", &[], Duration::from_secs(5)).await.unwrap_err();
+        let e = c
+            .cleanup("k", PromptMode::Standard, "hi", "", &[], Duration::from_secs(5))
+            .await
+            .unwrap_err();
         assert!(matches!(e, CleanupError::NoInternet | CleanupError::Timeout), "{e:?}");
     }
 }

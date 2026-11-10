@@ -1,0 +1,18 @@
+[package]
+name = "wirl-sensevoice"
+description = "SenseVoice (sherpa-onnx) sidecar process for Wirl's Cantonese model. Crashes here never take down the app."
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "wirl-sensevoice"
+path = "src/main.rs"
+
+[dependencies]
+wirl-core = { path = "../wirl-core", default-features = false }
+serde_json.workspace = true
+# Official k2-fsa Rust bindings over the sherpa-onnx C API. The default
+# "static" feature links sherpa-onnx and onnxruntime into the executable
+# (Windows: the static /MT build, so build with +crt-static; see
+# scripts/build-sidecars.ps1). No DLLs to ship.
+sherpa-onnx = { version = "=1.13.8", default-features = false, features = ["static"] }

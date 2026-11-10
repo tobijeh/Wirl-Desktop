@@ -4,16 +4,16 @@ Guidance for anyone (human or AI) changing this repo. Read this first.
 
 ## What Wirl is
 
-A system-tray dictation app: hotkey → record → Whisper (local) → Claude cleanup → paste at the cursor → restore clipboard. Desktop twin of the Wirl Android app; the two share a dictionary through an end-to-end encrypted mailbox (no accounts).
+A system-tray dictation app: hotkey → record → Whisper or SenseVoice (local) → Claude cleanup → paste at the cursor → restore clipboard. Desktop twin of the Wirl Android app; the two share a dictionary through an end-to-end encrypted mailbox (no accounts).
 
 ## Hard rules
 
 1. **No API keys in the repo or in GitHub Actions.** Each user enters their own Anthropic key in Setup; it lives in Windows Credential Manager (`keyring`). The quality-test script reads `ANTHROPIC_API_KEY` from the environment at run time and never saves it. Never add a workflow step that calls the Claude API.
-2. **The core cleanup prompt is fixed.** `wirl_core::prompt::CORE_PROMPT` must match the product spec character for character and is not user-editable. Only style notes and matching dictionary entries are appended (in that order, under the exact headers in `prompt.rs`).
+2. **The core cleanup prompt is fixed.** `wirl_core::prompt::CORE_PROMPT` must match the product spec character for character and is not user-editable. Only style notes and matching dictionary entries are appended (in that order, under the exact headers in `prompt.rs`). Exception: when the Cantonese model produced the transcript, `CANTONESE_BLOCK` goes right after the core prompt (see Cantonese model below).
 3. **Cleanup request:** model `claude-haiku-5-5`, `thinking: {type: "disabled"}`, `output_config.effort: "low"`, no sampling parameters, streamed. One shared function (`ClaudeClient::cleanup`) for dictation, clean-selection and the quality script.
 4. **Icons are used exactly as provided.** The 25 PNGs cut from `wirl-icons-sheet.png` (or a `wirl-icons.zip`) (in `ui/assets/icons/`, order and default from `icons.json`) are never redrawn, restyled or substituted. Only scaling for `.ico`/tray sizes and the tray-state overlays (red ring on the tray icon only, dimming, greyscale, amber badge, green dot) are allowed.
 5. **Sync protocol is shared with Android.** Any change must be made in `docs/sync-protocol.md` first and stay wire-compatible. The `known_test_vector` test pins the crypto.
-6. **Whisper runs in a sidecar process** (`crates/wirl-whisper`). Never link whisper.cpp into the app process. If the sidecar dies, the app logs why, fails pending requests, restarts it and reloads the model.
+6. **Speech engines run in sidecar processes** (`crates/wirl-whisper`, `crates/wirl-sensevoice`). Never link whisper.cpp or sherpa-onnx into the app process. If the sidecar dies or times out, the app logs why, fails pending requests, restarts it and reloads the model.
 7. **Nothing heavy on the UI thread.** Capture has its own thread, Whisper its own process, clipboard/SendInput work runs in `spawn_blocking`. Every stage has a timeout (`wirl_core::pipeline`); the watchdog resets anything busy over 30 s.
 8. **Plain language, autosave.** UI text is short and non-technical. No Save buttons; every change applies immediately.
 9. **Portable core.** OS-specific code stays in `src-tauri/src/platform/` (Windows implementation + stubs). Logic that can be tested without an OS goes in `wirl-core` with unit tests.
@@ -36,13 +36,14 @@ crates/wirl-core      pure logic (unit tested, builds anywhere)
   onboarding.rs       usage counts, one-time clean-up tip, shortcut card rule
   settings.rs, models.rs (catalog + resumable verified download), ipc.rs, icons.rs, diagnostics.rs, watchdog.rs
 crates/wirl-whisper   sidecar: JSON lines over stdin/stdout, whisper-rs
+crates/wirl-sensevoice  sidecar for the Cantonese model: same protocol, sherpa-onnx (static, no DLLs)
 relay/                Cloudflare Worker: one Durable Object per mailbox (rules in src/mailbox.js, node tests)
 crates/wirl-icons     slice wirl-icons-sheet.png / unzip wirl-icons.zip → ui/assets/icons, generate src-tauri/icons
 src-tauri/src
   lib.rs              plugins, setup, run loop (closing the window keeps Wirl in the tray)
   app.rs              shared state (App), session counter, attention items
   dictation.rs        dictation + clean-selection flows, watchdog task
-  sidecar.rs          spawn/restart/GPU→CPU fallback, request routing, timeouts
+  sidecar.rs          spawn/restart/GPU→CPU fallback, Whisper↔SenseVoice switch, request routing, timeouts
   audio.rs            cpal capture thread, chime
   hotkeys.rs          global shortcuts (Cancel only while recording), conflicts
   pill.rs, tray.rs    indicator window and tray icon/menu
@@ -77,6 +78,15 @@ Copy selection → `UndoTracker::on_hotkey`. Same text as the last cleanup → p
 - Relay URL: `wirl_core::sync::DEFAULT_RELAY` (`https://wirl-relay.wirl.workers.dev`), overridable at build time with `WIRL_RELAY_URL`. Phones take it from the QR code.
 - Manual end-to-end check: run the relay locally (`cd relay && npx wrangler@4 dev --local --port 8799`) and `WIRL_RELAY_URL=http://127.0.0.1:8799 cargo run -p wirl-core --example relay_smoke`.
 
+## Cantonese model
+
+- **Cantonese (粵語)** on the Dictation page runs SenseVoice (`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`, official k2-fsa release) through sherpa-onnx in `wirl-sensevoice`. Details, test results and the shared prompt block: `docs/cantonese.md`.
+- The model is downloaded in the app (166 MB `.tar.bz2`, SHA-256 checked, unpacked to `model.int8.onnx` + `tokens.txt`), never bundled. `models::Engine` says which sidecar runs a model; one engine process runs at a time.
+- sherpa-onnx is the official `sherpa-onnx` crate, pinned exactly (`=1.13.8`), linked statically. Its Windows libraries are built with /MT, so the sidecar is built with `-C target-feature=+crt-static` (`build-sidecars.ps1`, its own target folder). It's excluded from the lint job's clippy/tests and checked in the build job instead (clippy, start-up smoke test, real recognition on a test clip).
+- Language is fixed to `yue`, `use_itn` is on. All-capital English from SenseVoice is lower-cased; chunks are joined without spaces between Chinese characters.
+- Cleanup: `PromptMode::Cantonese` adds `CANTONESE_BLOCK` after the core prompt, for dictations from this model only (clean-selection is unchanged). **The block must stay identical in the Android (Wirlwind) and desktop repos**; `docs/cantonese.md` holds the shared copy and a unit test checks the code matches it.
+- Dictionary entries written in Chinese characters are always sent in Cantonese mode (the model writes simplified, entries are usually traditional).
+
 ## Welcome tour (onboarding)
 
 - First launch opens the settings window on `#tour` (full window, no sidebar): Welcome → Get ready (only if the microphone or API key is missing; the speech model starts downloading in the background) → Try talking → Tidy up some text → You're all set. `first_run_done` is set only when the tour is finished or skipped, so closing the window halfway brings it back next launch. Anyone can replay it from Setup ("Take the tour") or the Home shortcut card.
@@ -96,14 +106,14 @@ Ready, Recording (red ring), Processing (dimmed, pulsing), Off (greyscale), Need
 ## Commands
 
 ```bash
-cargo test --workspace --exclude wirl-whisper     # unit tests
+cargo test --workspace --exclude wirl-whisper --exclude wirl-sensevoice   # unit tests
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 node scripts/check-ui.mjs                          # UI syntax
 node scripts/test-ui.mjs                           # UI logic (welcome tour)
 node --test relay/test/mailbox.test.mjs            # sync relay rules
 cargo run -p wirl-icons -- all                     # icons (ui/assets/icons, else wirl-icons-sheet.png or wirl-icons.zip)
-./scripts/build-sidecars.ps1                       # Windows sidecars
+./scripts/build-sidecars.ps1                       # Windows sidecars (Whisper GPU + CPU, SenseVoice)
 npm run tauri dev
 cargo run -p wirl-core --example cleanup_quality   # manual, needs ANTHROPIC_API_KEY in your shell
 ```

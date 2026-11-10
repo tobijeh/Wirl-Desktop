@@ -11,6 +11,7 @@ Status per platform.
 | | Vulkan GPU with automatic CPU fallback | 🟢 | ⬜ |
 | | Sidecar crash/OOM isolation, auto-restart, reason logged | 🟢 | ⬜ |
 | | Background chunking at natural pauses (5–10 s) | ✅ | ❔ |
+| | Quiet voices and trailing-off last words kept (room-relative voice detection) | ✅ | ❔ |
 | | Final chunk starts the instant recording stops | 🟢 | ❔ |
 | | `audio_ctx` sized per chunk (min 384) | ✅ | ❔ |
 | | Dictionary terms as Whisper initial prompt | ✅ | ❔ |

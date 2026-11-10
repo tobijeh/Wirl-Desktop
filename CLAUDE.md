@@ -59,7 +59,7 @@ ui/                   settings.html/js, pill.html/js, pill-view.js (shared rende
 1. Dictate pressed → `DictateTrigger` decides start/stop (tap toggles; hold ≥350 ms records until release when Hold to talk is on).
 2. Start: pause playing media, open mic, register Cancel, warm the Claude connection, make sure the model is loaded, show the Recording pill.
 3. While recording, the chunker cuts at natural pauses after ≥5 s (forced by 10 s); each speech chunk is transcribed in the background with `audio_ctx` sized to its length and dictionary terms as the initial prompt.
-4. Stop: the final chunk is sent immediately. Recordings under 1 s or with no speech are discarded silently.
+4. Stop: the final chunk is sent immediately. Recordings under 1 s or with no speech are discarded silently. Pauses and the end of speech are found relative to the room's background (measured in the first 240 ms), not only the fixed speech threshold, so soft speakers, quiet microphones and trailing-off last words aren't trimmed as silence (`Chunker::is_voice`; tests in `audio.rs`).
 5. Join → filter. Nothing left = no speech (silent discard).
 6. Cleanup with matching dictionary entries. Failure inserts the raw transcript and shows the reason.
 7. Insert via clipboard + Ctrl+V, restore the clipboard if nobody changed it. Blocked (elevated window etc.) → leave text on clipboard, "Copied, press Ctrl+V".

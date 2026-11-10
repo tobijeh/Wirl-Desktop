@@ -1,0 +1,17 @@
+# Wirl sync relay. Deployed by .github/workflows/relay.yml to
+# https://wirl-relay.<your-subdomain>.workers.dev (here: wirl.workers.dev).
+name = "wirl-relay"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "MAILBOX"
+class_name = "Mailbox"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Mailbox"]
+
+[observability]
+enabled = true

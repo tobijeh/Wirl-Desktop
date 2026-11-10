@@ -1,220 +1,243 @@
-//! Phone sync over Wi-Fi. See docs/sync-protocol.md; the Android app
-//! implements the same protocol.
+//! Dictionary sync through an encrypted mailbox (protocol v2). See
+//! docs/sync-protocol.md; the Android app implements the same protocol.
+//!
+//! Every device in a sync group shares one 32-byte secret (from the QR
+//! code). From it each device derives the mailbox id, the mailbox token and
+//! the encryption key. The relay only ever stores ciphertext.
 
-use crate::dictionary::{merge_entries, Entry};
-use aes_gcm::aead::{Aead, KeyInit, Payload};
+use crate::dictionary::{merge_entries, Entry, TOMBSTONE_MAX_AGE_MS};
+use aes_gcm::aead::{Aead, KeyInit, Payload as AeadPayload};
 use aes_gcm::{Aes256Gcm, Nonce};
-use base64::engine::general_purpose::STANDARD as B64;
+use base64::engine::general_purpose::{STANDARD as B64, URL_SAFE_NO_PAD as B64URL};
 use base64::Engine;
 use hkdf::Hkdf;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 
-pub const PROTOCOL_VERSION: u32 = 1;
-pub const SERVICE_TYPE: &str = "_wirl._tcp.local.";
-pub const SYNC_PATH: &str = "/wirl/sync";
-pub const HKDF_INFO: &[u8] = b"wirl-sync-v1";
-pub const DEFAULT_PORT: u16 = 47913;
+pub const PROTOCOL_VERSION: u32 = 2;
+/// The mailbox relay used when a build doesn't override it.
+pub const DEFAULT_RELAY: &str = "https://wirl-relay.wirl.workers.dev";
+pub const INFO_MAILBOX: &[u8] = b"wirl-mailbox-v2";
+pub const INFO_TOKEN: &[u8] = b"wirl-token-v2";
+pub const INFO_KEY: &[u8] = b"wirl-sync-v2";
+/// Devices not seen for this long are dropped from the device list.
+pub const DEVICE_MAX_AGE_MS: i64 = 180 * 24 * 60 * 60 * 1000;
+/// A device re-uploads after this long even when nothing changed, so the
+/// others can show "Synced X ago" for it.
+pub const HEARTBEAT_MS: i64 = 15 * 60 * 1000;
 
 /// Contents of the pairing QR code.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct PairingQr {
     pub v: u32,
-    pub device_id: String,
+    /// The computer's name, for display.
     pub name: String,
+    /// Base URL of the mailbox relay.
+    pub relay: String,
+    /// Standard base64 of the 32-byte group secret.
     pub secret: String,
-    pub port: u16,
-    pub hosts: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SyncRequest {
-    pub v: u32,
-    pub phone_id: String,
-    pub phone_name: String,
-    pub nonce: String,
-    pub ciphertext: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncResponse {
-    pub nonce: String,
-    pub ciphertext: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct EntriesPayload {
-    pub entries: Vec<Entry>,
-}
-
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SyncError {
-    #[error("unauthorized")]
-    Unauthorized,
-    #[error("bad request: {0}")]
-    BadRequest(String),
+    #[error("the sync secret is not valid")]
+    BadSecret,
+    /// The data doesn't decrypt: wrong secret or tampering.
+    #[error("couldn't decrypt the synced dictionary")]
+    Decrypt,
+    #[error("unexpected data: {0}")]
+    BadData(String),
 }
 
-impl SyncError {
-    pub fn http_status(&self) -> u16 {
-        match self {
-            SyncError::Unauthorized => 401,
-            SyncError::BadRequest(_) => 400,
-        }
-    }
+/// Values derived from the group secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupKeys {
+    /// 64 lowercase hex characters.
+    pub mailbox: String,
+    /// URL-safe base64 without padding (43 characters).
+    pub token: String,
+    pub key: [u8; 32],
 }
 
-/// 32 random bytes, base64 encoded.
+fn hkdf32(ikm: &[u8], info: &[u8]) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(None, ikm);
+    let mut okm = [0u8; 32];
+    hk.expand(info, &mut okm).expect("32 bytes is a valid HKDF length");
+    okm
+}
+
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 32 random bytes, standard base64.
 pub fn new_secret() -> String {
     let mut b = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut b);
     B64.encode(b)
 }
 
-/// HKDF-SHA256(ikm = decoded secret bytes, salt = none, info = "wirl-sync-v1") -> 32 bytes.
-pub fn derive_key(secret_b64: &str) -> Result<[u8; 32], SyncError> {
-    let ikm = B64
-        .decode(secret_b64.trim())
-        .map_err(|_| SyncError::BadRequest("secret is not base64".into()))?;
-    let hk = Hkdf::<Sha256>::new(None, &ikm);
-    let mut okm = [0u8; 32];
-    hk.expand(HKDF_INFO, &mut okm)
-        .map_err(|_| SyncError::BadRequest("hkdf".into()))?;
-    Ok(okm)
+/// HKDF-SHA256 (no salt) of the 32 secret bytes with three fixed labels.
+pub fn derive(secret_b64: &str) -> Result<GroupKeys, SyncError> {
+    let ikm = B64.decode(secret_b64.trim()).map_err(|_| SyncError::BadSecret)?;
+    if ikm.len() != 32 {
+        return Err(SyncError::BadSecret);
+    }
+    Ok(GroupKeys {
+        mailbox: hex(&hkdf32(&ikm, INFO_MAILBOX)),
+        token: B64URL.encode(hkdf32(&ikm, INFO_TOKEN)),
+        key: hkdf32(&ikm, INFO_KEY),
+    })
 }
 
-/// AES-256-GCM encrypt with AAD = phoneId. Returns (nonce_b64, ciphertext_b64);
-/// the ciphertext carries the 16-byte tag appended, as is standard.
-pub fn encrypt(key: &[u8; 32], phone_id: &str, plaintext: &[u8]) -> (String, String) {
+/// SHA-256 of the token, hex. The relay stores this, never the token.
+pub fn token_hash(token: &str) -> String {
+    hex(&Sha256::digest(token.as_bytes()))
+}
+
+/// One encrypted mailbox value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sealed {
+    pub nonce: String,
+    pub ciphertext: String,
+}
+
+/// AES-256-GCM, AAD = the mailbox id (ASCII). Fresh random 12-byte nonce.
+pub fn encrypt(keys: &GroupKeys, plaintext: &[u8]) -> Sealed {
     let mut nonce = [0u8; 12];
     rand::thread_rng().fill_bytes(&mut nonce);
-    (B64.encode(nonce), encrypt_with_nonce(key, phone_id, &nonce, plaintext))
+    encrypt_with_nonce(keys, &nonce, plaintext)
 }
 
 /// Deterministic form, for test vectors only. Never reuse a nonce.
-pub fn encrypt_with_nonce(key: &[u8; 32], phone_id: &str, nonce: &[u8; 12], plaintext: &[u8]) -> String {
-    let cipher = Aes256Gcm::new(key.into());
+pub fn encrypt_with_nonce(keys: &GroupKeys, nonce: &[u8; 12], plaintext: &[u8]) -> Sealed {
+    let cipher = Aes256Gcm::new((&keys.key).into());
     let ct = cipher
         .encrypt(
             Nonce::from_slice(nonce),
-            Payload {
+            AeadPayload {
                 msg: plaintext,
-                aad: phone_id.as_bytes(),
+                aad: keys.mailbox.as_bytes(),
             },
         )
         .expect("aes-gcm encryption cannot fail for in-memory buffers");
-    B64.encode(ct)
+    Sealed {
+        nonce: B64.encode(nonce),
+        ciphertext: B64.encode(ct),
+    }
 }
 
-pub fn decrypt(key: &[u8; 32], phone_id: &str, nonce_b64: &str, ct_b64: &str) -> Result<Vec<u8>, SyncError> {
-    let nonce = B64.decode(nonce_b64).map_err(|_| SyncError::Unauthorized)?;
+pub fn decrypt(keys: &GroupKeys, sealed: &Sealed) -> Result<Vec<u8>, SyncError> {
+    let nonce = B64.decode(&sealed.nonce).map_err(|_| SyncError::Decrypt)?;
     if nonce.len() != 12 {
-        return Err(SyncError::Unauthorized);
+        return Err(SyncError::Decrypt);
     }
-    let ct = B64.decode(ct_b64).map_err(|_| SyncError::Unauthorized)?;
-    let cipher = Aes256Gcm::new(key.into());
-    cipher
+    let ct = B64.decode(&sealed.ciphertext).map_err(|_| SyncError::Decrypt)?;
+    Aes256Gcm::new((&keys.key).into())
         .decrypt(
             Nonce::from_slice(&nonce),
-            Payload {
+            AeadPayload {
                 msg: &ct,
-                aad: phone_id.as_bytes(),
+                aad: keys.mailbox.as_bytes(),
             },
         )
-        .map_err(|_| SyncError::Unauthorized)
+        .map_err(|_| SyncError::Decrypt)
 }
 
-/// Result of a successful sync exchange.
-#[derive(Debug)]
-pub struct SyncOutcome {
-    pub phone_id: String,
-    pub phone_name: String,
-    /// Which candidate secret worked (index into the list passed in).
-    pub secret_index: usize,
-    pub merged: Vec<Entry>,
-    pub response: SyncResponse,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DeviceKind {
+    Computer,
+    Phone,
 }
 
-/// Handles one POST /wirl/sync body. `candidate_secrets` are the secrets
-/// to try for this phone: its stored secret if paired, plus any pending
-/// pairing secret. Decryption failure with all of them means 401.
-pub fn handle_sync(
-    body: &[u8],
-    candidate_secrets: &dyn Fn(&str) -> Vec<String>,
-    local: &[Entry],
-) -> Result<SyncOutcome, SyncError> {
-    let req: SyncRequest = serde_json::from_slice(body).map_err(|e| SyncError::BadRequest(e.to_string()))?;
-    if req.v != PROTOCOL_VERSION {
-        return Err(SyncError::BadRequest(format!("unsupported version {}", req.v)));
-    }
-    if uuid::Uuid::parse_str(&req.phone_id).is_err() {
-        return Err(SyncError::BadRequest("phoneId must be a UUID".into()));
-    }
-    let secrets = candidate_secrets(&req.phone_id);
-    for (i, secret) in secrets.iter().enumerate() {
-        let Ok(key) = derive_key(secret) else { continue };
-        let Ok(plain) = decrypt(&key, &req.phone_id, &req.nonce, &req.ciphertext) else {
-            continue;
-        };
-        let payload: EntriesPayload =
-            serde_json::from_slice(&plain).map_err(|e| SyncError::BadRequest(format!("payload: {e}")))?;
-        let mut merged = merge_entries(local, &payload.entries);
-        let now = crate::dictionary::now_ms();
-        merged.retain(|e| !(e.deleted && now - e.updated_at > crate::dictionary::TOMBSTONE_MAX_AGE_MS));
-        let out = serde_json::to_vec(&EntriesPayload {
-            entries: merged.clone(),
-        })
-        .expect("serialize");
-        let (nonce, ciphertext) = encrypt(&key, &req.phone_id, &out);
-        return Ok(SyncOutcome {
-            phone_id: req.phone_id,
-            phone_name: req.phone_name,
-            secret_index: i,
-            merged,
-            response: SyncResponse { nonce, ciphertext },
-        });
-    }
-    Err(SyncError::Unauthorized)
+/// A device in the sync group, as shown on the others ("Synced 2 min ago").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Device {
+    pub id: String,
+    pub name: String,
+    pub kind: DeviceKind,
+    /// Milliseconds since the epoch of this device's last successful upload.
+    pub last_sync: i64,
 }
 
-/// Builds a request the way the phone does. Used by tests and the
-/// developer diagnostics "simulate phone" tool.
-pub fn build_phone_request(secret: &str, phone_id: &str, phone_name: &str, entries: &[Entry]) -> Vec<u8> {
-    let key = derive_key(secret).expect("valid secret");
-    let plain = serde_json::to_vec(&EntriesPayload {
-        entries: entries.to_vec(),
-    })
-    .unwrap();
-    let (nonce, ciphertext) = encrypt(&key, phone_id, &plain);
-    serde_json::to_vec(&SyncRequest {
-        v: PROTOCOL_VERSION,
-        phone_id: phone_id.into(),
-        phone_name: phone_name.into(),
-        nonce,
-        ciphertext,
-    })
-    .unwrap()
+/// The decrypted mailbox content.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Payload {
+    #[serde(default)]
+    pub entries: Vec<Entry>,
+    #[serde(default)]
+    pub devices: Vec<Device>,
 }
 
-/// True for RFC 1918, link-local and loopback IPv4 addresses.
-pub fn is_private_ipv4(ip: std::net::Ipv4Addr) -> bool {
-    ip.is_private() || ip.is_link_local() || ip.is_loopback()
+pub fn seal_payload(keys: &GroupKeys, p: &Payload) -> Sealed {
+    encrypt(keys, &serde_json::to_vec(p).expect("payload serializes"))
 }
 
-/// True if a peer address may talk to the sync server.
-pub fn is_allowed_peer(ip: std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => is_private_ipv4(v4),
-        std::net::IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_private_ipv4(v4);
+pub fn open_payload(keys: &GroupKeys, sealed: &Sealed) -> Result<Payload, SyncError> {
+    let plain = decrypt(keys, sealed)?;
+    serde_json::from_slice(&plain).map_err(|e| SyncError::BadData(e.to_string()))
+}
+
+/// Per id: the newer `lastSync` wins. Old devices are dropped. Sorted by id.
+pub fn merge_devices(a: &[Device], b: &[Device], now: i64) -> Vec<Device> {
+    let mut map: HashMap<&str, &Device> = HashMap::new();
+    for d in a.iter().chain(b.iter()) {
+        match map.get(d.id.as_str()) {
+            Some(cur) if cur.last_sync >= d.last_sync => {}
+            _ => {
+                map.insert(&d.id, d);
             }
-            v6.is_loopback() || (v6.segments()[0] & 0xffc0) == 0xfe80 || (v6.segments()[0] & 0xfe00) == 0xfc00
         }
     }
+    let mut out: Vec<Device> = map
+        .into_values()
+        .filter(|d| now - d.last_sync <= DEVICE_MAX_AGE_MS)
+        .cloned()
+        .collect();
+    out.sort_by(|x, y| x.id.cmp(&y.id));
+    out
+}
+
+/// The result of merging this device's dictionary with the mailbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeOutcome {
+    /// What this device should now store locally (tombstones included).
+    pub entries: Vec<Entry>,
+    /// What to upload, if an upload is needed.
+    pub upload: Option<Payload>,
+}
+
+/// Merges local entries into the mailbox content. An upload is needed when
+/// the merged entries differ from the mailbox, or this device's own record
+/// is missing, renamed or older than the heartbeat.
+pub fn merge_with_mailbox(local: &[Entry], remote: Option<&Payload>, me: &Device, now: i64) -> MergeOutcome {
+    let empty = Payload::default();
+    let remote = remote.unwrap_or(&empty);
+    let mut entries = merge_entries(local, &remote.entries);
+    entries.retain(|e| !(e.deleted && now - e.updated_at > TOMBSTONE_MAX_AGE_MS));
+    let mine = remote.devices.iter().find(|d| d.id == me.id);
+    let stale = match mine {
+        None => true,
+        Some(d) => d.name != me.name || d.kind != me.kind || now - d.last_sync >= HEARTBEAT_MS,
+    };
+    let mut remote_sorted = remote.entries.clone();
+    remote_sorted.sort_by(|a, b| a.id.cmp(&b.id));
+    let changed = entries != remote_sorted;
+    let upload = (changed || stale).then(|| {
+        let fresh = Device {
+            last_sync: now,
+            ..me.clone()
+        };
+        Payload {
+            entries: entries.clone(),
+            devices: merge_devices(&remote.devices, &[fresh], now),
+        }
+    });
+    MergeOutcome { entries, upload }
 }
 
 #[cfg(test)]
@@ -225,127 +248,177 @@ mod tests {
         Entry {
             id: id.into(),
             term: term.into(),
-            sounds_like: vec!["x".into()],
-            note: "".into(),
+            sounds_like: vec![],
+            note: String::new(),
             updated_at: at,
             deleted: false,
         }
     }
 
-    const PHONE: &str = "0b7c6f7e-1d2a-4b5c-9d8e-7f6a5b4c3d2e";
-
-    #[test]
-    fn encrypt_decrypt_roundtrip_with_aad() {
-        let key = derive_key(&new_secret()).unwrap();
-        let (n, c) = encrypt(&key, PHONE, b"hello");
-        assert_eq!(decrypt(&key, PHONE, &n, &c).unwrap(), b"hello");
-        // Wrong AAD (phoneId) fails.
-        assert_eq!(decrypt(&key, "other", &n, &c), Err(SyncError::Unauthorized));
+    fn me(now: i64) -> Device {
+        Device {
+            id: "11111111-1111-4111-8111-111111111111".into(),
+            name: "DESKTOP".into(),
+            kind: DeviceKind::Computer,
+            last_sync: now,
+        }
     }
 
-    /// Published in docs/sync-protocol.md; cross-checked against Python's
-    /// `cryptography` package. The Android app should pass the same vector.
+    const NOW: i64 = 1_800_000_000_000;
+
+    fn vector_secret() -> String {
+        let bytes: Vec<u8> = (0u8..32).collect();
+        B64.encode(bytes)
+    }
+
+    /// Published in docs/sync-protocol.md. The Android app must match it.
     #[test]
     fn known_test_vector() {
-        let secret_bytes: Vec<u8> = (0u8..32).collect();
-        let secret = B64.encode(&secret_bytes);
+        let secret = vector_secret();
         assert_eq!(secret, "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
-        let key = derive_key(&secret).unwrap();
-        let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex, "f2b4a1a6ce55a07aea8ccb22e73d9ad6f36e4e177601c4e0d1be7ad47e6eb66c");
+        let k = derive(&secret).unwrap();
+        assert_eq!(k.mailbox, VECTOR_MAILBOX);
+        assert_eq!(k.token, VECTOR_TOKEN);
+        assert_eq!(hex(&k.key), VECTOR_KEY);
+        assert_eq!(token_hash(&k.token), VECTOR_TOKEN_HASH);
         let nonce: [u8; 12] = core::array::from_fn(|i| i as u8);
-        let ct = encrypt_with_nonce(&key, PHONE, &nonce, br#"{"entries":[]}"#);
-        assert_eq!(ct, "T4GGLLyKJaiy63rNMucjUgABVlyT/DGPB7LUjk1Z");
+        let s = encrypt_with_nonce(&k, &nonce, br#"{"entries":[],"devices":[]}"#);
+        assert_eq!(s.nonce, "AAECAwQFBgcICQoL");
+        assert_eq!(s.ciphertext, VECTOR_CIPHERTEXT);
+        assert_eq!(decrypt(&k, &s).unwrap(), br#"{"entries":[],"devices":[]}"#);
+    }
+
+    const VECTOR_MAILBOX: &str = "edaba0f8f5a6b41660b29dfc43e0c1f9c3067ab5d6cef6c3564a014f7752ee28";
+    const VECTOR_TOKEN: &str = "AJz6SLfpq2jeFQJFKtPqDMJjLGr4HmRTVsv4YRMp_Cw";
+    const VECTOR_KEY: &str = "beccb5b399d59b7385c4d5d5df2090be773deaf000144a2b2caa2a567232e841";
+    const VECTOR_TOKEN_HASH: &str = "81d430e62ca3afa96592b7a7c50f6213ccbde0fd21a6cebfa6b0d5038facb16c";
+    const VECTOR_CIPHERTEXT: &str = "UcqqKN+j0S2YVtLI2StUerwpqF/KNKjI1Hzcac50dzPtEw5tYv5gpse67A==";
+
+    #[test]
+    fn derive_rejects_bad_secrets() {
+        assert_eq!(derive("not base64!"), Err(SyncError::BadSecret));
+        assert_eq!(derive(&B64.encode([0u8; 16])), Err(SyncError::BadSecret));
+        let k = derive(&new_secret()).unwrap();
+        assert_eq!(k.mailbox.len(), 64);
+        assert_eq!(k.token.len(), 43);
+    }
+
+    #[test]
+    fn payload_roundtrip_and_wrong_secret() {
+        let k = derive(&new_secret()).unwrap();
+        let p = Payload {
+            entries: vec![entry("a", "Sela", 5)],
+            devices: vec![me(NOW)],
+        };
+        let s = seal_payload(&k, &p);
+        assert_eq!(open_payload(&k, &s).unwrap(), p);
+        let other = derive(&new_secret()).unwrap();
+        assert_eq!(open_payload(&other, &s), Err(SyncError::Decrypt));
+        let mut tampered = s.clone();
+        tampered.ciphertext = B64.encode(b"0123456789abcdef0123");
+        assert_eq!(open_payload(&k, &tampered), Err(SyncError::Decrypt));
+    }
+
+    #[test]
+    fn first_sync_uploads_local_dictionary() {
+        let out = merge_with_mailbox(&[entry("a", "Sela", 5)], None, &me(NOW), NOW);
+        let up = out.upload.unwrap();
+        assert_eq!(up.entries.len(), 1);
+        assert_eq!(up.devices, vec![me(NOW)]);
+    }
+
+    #[test]
+    fn nothing_to_upload_when_in_step_and_recent() {
+        let remote = Payload {
+            entries: vec![entry("a", "Sela", 5)],
+            devices: vec![me(NOW - 1000)],
+        };
+        let out = merge_with_mailbox(&[entry("a", "Sela", 5)], Some(&remote), &me(NOW), NOW);
+        assert!(out.upload.is_none());
+        assert_eq!(out.entries, remote.entries);
+    }
+
+    #[test]
+    fn heartbeat_uploads_after_15_minutes() {
+        let remote = Payload {
+            entries: vec![],
+            devices: vec![me(NOW - HEARTBEAT_MS)],
+        };
+        assert!(merge_with_mailbox(&[], Some(&remote), &me(NOW), NOW).upload.is_some());
+    }
+
+    #[test]
+    fn remote_changes_come_down_and_local_changes_go_up() {
+        let phone = Device {
+            id: "22222222-2222-4222-8222-222222222222".into(),
+            name: "Pixel".into(),
+            kind: DeviceKind::Phone,
+            last_sync: NOW - 5000,
+        };
+        let remote = Payload {
+            entries: vec![entry("a", "Sela", 10), entry("b", "phone term", 3)],
+            devices: vec![phone.clone(), me(NOW - 1000)],
+        };
+        let local = vec![entry("a", "Selah", 5), entry("c", "desk term", 4)];
+        let out = merge_with_mailbox(&local, Some(&remote), &me(NOW), NOW);
+        let terms: Vec<&str> = out.entries.iter().map(|e| e.term.as_str()).collect();
         assert_eq!(
-            decrypt(&key, PHONE, &B64.encode(nonce), &ct).unwrap(),
-            br#"{"entries":[]}"#
+            terms,
+            vec!["Sela", "phone term", "desk term"],
+            "newer remote edit wins, both new terms kept"
         );
+        let up = out.upload.unwrap();
+        assert_eq!(up.entries, out.entries);
+        assert_eq!(up.devices.len(), 2);
+        assert!(up.devices.contains(&phone));
     }
 
     #[test]
-    fn full_exchange_merges_and_both_sides_match() {
-        let secret = new_secret();
-        let local = vec![entry("a", "desk", 5), entry("b", "old", 1)];
-        let phone = vec![entry("b", "new", 2), entry("c", "phone", 3)];
-        let body = build_phone_request(&secret, PHONE, "Pixel", &phone);
-        let s2 = secret.clone();
-        let out = handle_sync(&body, &move |_| vec![s2.clone()], &local).unwrap();
-        assert_eq!(out.phone_name, "Pixel");
-        assert_eq!(out.merged.len(), 3);
-        // Phone decrypts the response and gets exactly the merged list.
-        let key = derive_key(&secret).unwrap();
-        let plain = decrypt(&key, PHONE, &out.response.nonce, &out.response.ciphertext).unwrap();
-        let p: EntriesPayload = serde_json::from_slice(&plain).unwrap();
-        assert_eq!(p.entries, out.merged);
-        assert_eq!(merge_entries(&phone, &p.entries), out.merged);
+    fn old_tombstones_and_devices_are_dropped() {
+        let mut t = entry("t", "gone", 1);
+        t.deleted = true;
+        let ghost = Device {
+            id: "33333333-3333-4333-8333-333333333333".into(),
+            name: "Old phone".into(),
+            kind: DeviceKind::Phone,
+            last_sync: NOW - DEVICE_MAX_AGE_MS - 1,
+        };
+        let remote = Payload {
+            entries: vec![t],
+            devices: vec![ghost],
+        };
+        let out = merge_with_mailbox(&[], Some(&remote), &me(NOW), NOW);
+        assert!(out.entries.is_empty());
+        assert_eq!(out.upload.unwrap().devices, vec![me(NOW)]);
     }
 
     #[test]
-    fn old_tombstones_are_purged_in_sync() {
-        let secret = new_secret();
-        let mut old = entry("t", "gone", 1);
-        old.deleted = true;
-        let body = build_phone_request(&secret, PHONE, "Pixel", &[old]);
-        let out = handle_sync(&body, &move |_| vec![secret.clone()], &[]).unwrap();
-        assert!(out.merged.is_empty());
-    }
-
-    #[test]
-    fn wrong_secret_is_rejected_with_401() {
-        let body = build_phone_request(&new_secret(), PHONE, "Pixel", &[]);
-        let wrong = new_secret();
-        let err = handle_sync(&body, &move |_| vec![wrong.clone()], &[]).unwrap_err();
-        assert_eq!(err, SyncError::Unauthorized);
-        assert_eq!(err.http_status(), 401);
-        let err = handle_sync(&body, &|_| vec![], &[]).unwrap_err();
-        assert_eq!(err.http_status(), 401);
-    }
-
-    #[test]
-    fn tampered_ciphertext_is_rejected() {
-        let secret = new_secret();
-        let body = build_phone_request(&secret, PHONE, "Pixel", &[]);
-        let mut req: SyncRequest = serde_json::from_slice(&body).unwrap();
-        let mut ct = B64.decode(&req.ciphertext).unwrap();
-        ct[0] ^= 1;
-        req.ciphertext = B64.encode(ct);
-        let body = serde_json::to_vec(&req).unwrap();
-        let err = handle_sync(&body, &move |_| vec![secret.clone()], &[]).unwrap_err();
-        assert_eq!(err.http_status(), 401);
-    }
-
-    #[test]
-    fn second_candidate_secret_reports_index() {
-        let pending = new_secret();
-        let body = build_phone_request(&pending, PHONE, "Pixel", &[]);
-        let list = vec![new_secret(), pending];
-        let out = handle_sync(&body, &move |_| list.clone(), &[]).unwrap();
-        assert_eq!(out.secret_index, 1);
+    fn device_merge_keeps_newest() {
+        let a = Device { last_sync: 5, ..me(0) };
+        let b = Device {
+            last_sync: 9,
+            name: "Renamed".into(),
+            ..me(0)
+        };
+        assert_eq!(
+            merge_devices(std::slice::from_ref(&a), std::slice::from_ref(&b), 10),
+            vec![b.clone()]
+        );
+        assert_eq!(merge_devices(std::slice::from_ref(&b), &[a], 10), vec![b]);
     }
 
     #[test]
     fn qr_json_shape() {
         let qr = PairingQr {
-            v: 1,
-            device_id: "id".into(),
-            name: "PC".into(),
-            secret: "s".into(),
-            port: 47913,
-            hosts: vec!["192.168.1.5".into()],
+            v: PROTOCOL_VERSION,
+            name: "DESKTOP".into(),
+            relay: DEFAULT_RELAY.into(),
+            secret: vector_secret(),
         };
-        let s = serde_json::to_string(&qr).unwrap();
+        let json = serde_json::to_string(&qr).unwrap();
         assert_eq!(
-            s,
-            r#"{"v":1,"deviceId":"id","name":"PC","secret":"s","port":47913,"hosts":["192.168.1.5"]}"#
+            json,
+            r#"{"v":2,"name":"DESKTOP","relay":"https://wirl-relay.wirl.workers.dev","secret":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="}"#
         );
-    }
-
-    #[test]
-    fn private_peers_only() {
-        use std::net::{IpAddr, Ipv4Addr};
-        assert!(is_allowed_peer(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2))));
-        assert!(is_allowed_peer(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2))));
-        assert!(is_allowed_peer(IpAddr::V4(Ipv4Addr::new(172, 16, 0, 2))));
-        assert!(!is_allowed_peer(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
     }
 }

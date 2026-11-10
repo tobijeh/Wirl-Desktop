@@ -35,15 +35,6 @@ pub struct DownloadState {
     pub active: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct PendingPairing {
-    pub secret: String,
-    pub created_ms: i64,
-}
-
-/// How long a pairing QR code stays valid.
-pub const PAIRING_TTL_MS: i64 = 15 * 60 * 1000;
-
 #[derive(Debug, Clone, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateStatus {
@@ -72,11 +63,6 @@ pub struct App {
     pub watchdog: Mutex<Watchdog>,
     pub downloads: Mutex<HashMap<ModelId, DownloadState>>,
     pub download_cancel: Mutex<HashMap<ModelId, Arc<AtomicBool>>>,
-    pub pairing: Mutex<Option<PendingPairing>>,
-    /// When a phone's sync was last refused (unknown or expired pairing).
-    /// Cleared by the next successful sync. Shown on the Dictionary page.
-    pub sync_rejected_ms: Mutex<Option<i64>>,
-    pub sync_port: Mutex<Option<u16>>,
     pub update: Mutex<UpdateStatus>,
     pub hotkey_conflicts: Mutex<Vec<(wirl_core::hotkey::Action, Conflict)>>,
     pub capturing_hotkey: AtomicBool,
@@ -128,9 +114,6 @@ pub fn init(handle: AppHandle) -> Arc<App> {
         watchdog: Mutex::new(Watchdog::default()),
         downloads: Mutex::new(HashMap::new()),
         download_cancel: Mutex::new(HashMap::new()),
-        pairing: Mutex::new(None),
-        sync_rejected_ms: Mutex::new(None),
-        sync_port: Mutex::new(None),
         update: Mutex::new(UpdateStatus::default()),
         hotkey_conflicts: Mutex::new(vec![]),
         capturing_hotkey: AtomicBool::new(false),

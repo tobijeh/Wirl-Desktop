@@ -34,6 +34,7 @@ const ui = {
   confirmReset: false,
   testText: "",
   tour: null,
+  confirmDisconnect: false,
 };
 
 // ---------- helpers ----------
@@ -298,44 +299,55 @@ function pageDictionary() {
       }
     </div>
     <h2>Phone sync</h2>
-    <div class="card">
-      ${
-        S.phones.length
-          ? S.phones
-              .map(
-                (p) => `<div class="row" style="padding:6px 0"><div class="grow"><div class="term">${esc(p.name)}</div>
-                <div class="muted small">Synced ${ago(p.lastSync)}</div></div>
-                <button class="ghost" data-act="unpair" data-id="${p.phoneId}">Unpair</button></div>`,
-              )
-              .join('<div class="divider"></div>')
-          : `<div class="muted">No phone paired yet.</div>`
-      }
-      <div class="divider"></div>
-      ${syncRejectedNote()}
-      ${
-        ui.pairing
-          ? `<div class="row" style="align-items:flex-start;gap:22px">
-              <div class="qr">${ui.pairing.svg}</div>
-              <div class="grow stack">
-                <div>On your phone: Wirl › Dictionary › ⋮ › Pair with computer, then scan this code. Keep both on the same Wi-Fi.</div>
-                <div class="muted small">This closes by itself once your phone connects, usually within a minute. If Windows Firewall asks, allow Wirl on Private networks.</div>
-                <div class="row"><button class="ghost" data-act="pair-close">Close</button><a class="link small" data-act="pair-cancel">Cancel pairing</a></div>
-              </div></div>`
-          : S.pairingPending
-            ? `<div class="row"><span class="spinner-inline"></span><div class="grow">Waiting for your phone to connect. The code works for 15 minutes.</div>
-                <button class="ghost" data-act="pair">Show code</button><a class="link small" data-act="pair-cancel">Cancel</a></div>`
-            : `<button class="primary" data-act="pair">Pair with phone</button>`
-      }
-    </div>
+    <div class="card">${syncCard()}</div>
   </div>`;
 }
 
-/** Amber note when a phone's sync was refused (it used a code this computer no longer knows). */
-function syncRejectedNote() {
-  const at = S.syncRejectedMs;
-  if (!at || Date.now() - at > 24 * 3600 * 1000) return "";
-  return `<div class="warning-box" style="margin-bottom:12px">A phone tried to sync ${ago(at)}, but this computer didn't recognize its pairing.
-    On the phone, tap <b>Pair again</b> (or Unpair, then Pair with computer), and scan a new code here.</div>`;
+/** The Phone sync card: phones in the group, status, pairing code, disconnect. */
+function syncCard() {
+  const sy = S.sync || {};
+  const phones = S.phones || [];
+  const status = sy.syncing
+    ? `<span class="spinner-inline"></span><span class="muted">Syncing…</span>`
+    : sy.error
+      ? `<span class="warn-text" style="color:var(--warning)">${esc(sy.error)}</span>`
+      : sy.lastOkMs
+        ? `<span class="muted">Last sync: ${ago(sy.lastOkMs)}</span>`
+        : "";
+  const list = phones.length
+    ? phones
+        .map(
+          (p) => `<div class="row" style="padding:6px 0"><div class="grow"><div class="term">${esc(p.name)}</div>
+            <div class="muted small">Synced ${ago(p.lastSync)}</div></div></div>`,
+        )
+        .join('<div class="divider"></div>')
+    : `<div class="muted">${
+        sy.active
+          ? "No phone has joined yet. Scan the code with Wirl on your phone."
+          : "Keep the same dictionary on your phone. It works anywhere with internet, and no account is needed."
+      }</div>`;
+  const qr = ui.pairing
+    ? `<div class="divider"></div><div class="row" style="align-items:flex-start;gap:22px">
+        <div class="qr">${ui.pairing.svg}</div>
+        <div class="grow stack">
+          <div>On your phone: open Wirl › <b>Computer sync</b> › <b>Pair with a computer</b>, then scan this code.</div>
+          <div class="muted small">Your phone doesn't need to be on the same Wi-Fi. Everything is encrypted on your devices before it's sent.</div>
+          <div><button class="ghost" data-act="pair-close">Close</button></div>
+        </div></div>`
+    : "";
+  const disconnect = phones.length
+    ? ui.confirmDisconnect
+      ? `<a class="link small" style="color:var(--warning)" data-act="disconnect-all">Click again to disconnect all phones</a>`
+      : `<a class="link small muted" data-act="disconnect-all">Disconnect all phones</a>`
+    : "";
+  return `${list}
+    ${status ? `<div class="row" style="margin-top:10px;gap:8px">${status}</div>` : ""}
+    ${qr}
+    <div class="row" style="margin-top:14px;gap:12px">
+      ${ui.pairing ? "" : `<button class="primary" data-act="pair">${phones.length ? "Pair another phone" : "Pair a phone"}</button>`}
+      ${sy.active ? `<button class="ghost" data-act="sync-now" ${sy.syncing ? "disabled" : ""}>Sync now</button>` : ""}
+      <span class="grow"></span>${disconnect}
+    </div>`;
 }
 
 const HOTKEY_ROWS = [
@@ -468,7 +480,7 @@ function pageSetup() {
         "Phone pairing <span class='muted small'>(optional)</span>",
         st.paired
           ? `Paired with ${esc(S.phones.map((p) => p.name).join(", "))}.`
-          : "Share your dictionary with Wirl on Android. When Windows Firewall asks, allow Wirl on Private networks.",
+          : "Keep the same dictionary on Wirl for Android. Works anywhere with internet, no account needed.",
         `<button class="warn" data-act="pair-from-setup">Pair</button>`,
       )}
     </div>
@@ -831,6 +843,8 @@ function go(p) {
   if (ui.capture) endCapture();
   page = p;
   ui.confirmReset = false;
+  ui.confirmDisconnect = false;
+  if (p === "dictionary") invoke("sync_now").catch(() => {});
   history.replaceState(null, "", `#${p}`);
   main.scrollTop = 0;
   renderPending = false;
@@ -964,17 +978,22 @@ async function act(name, el) {
         await act("pair");
         break;
       case "pair-close":
-        // Only hides the code: it stays valid until the phone connects or it expires.
         ui.pairing = null;
         render();
         break;
-      case "pair-cancel":
-        ui.pairing = null;
-        await invoke("pair_cancel");
-        render();
+      case "sync-now":
+        await invoke("sync_now");
         break;
-      case "unpair":
-        await invoke("unpair", { phoneId: id });
+      case "disconnect-all":
+        if (!ui.confirmDisconnect) {
+          ui.confirmDisconnect = true;
+          render();
+        } else {
+          ui.confirmDisconnect = false;
+          ui.pairing = null;
+          await invoke("disconnect_all_phones");
+          toast("All phones disconnected. Pair again with a new code.");
+        }
         break;
       case "capture":
         if (ui.capture === id) await endCapture();

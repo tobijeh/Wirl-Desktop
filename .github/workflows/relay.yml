@@ -1,0 +1,69 @@
+# Deploys the sync mailbox relay (relay/) to Cloudflare Workers.
+# Runs when relay/ changes on main, or by hand (Actions › Relay › Run workflow).
+#
+# Needs two repository secrets (README, "Phone sync server"):
+#   CLOUDFLARE_API_TOKEN   a token from the "Edit Cloudflare Workers" template
+#   CLOUDFLARE_ACCOUNT_ID  the account id from the Cloudflare dashboard URL
+# Without them the workflow tests the relay and skips the deploy with a notice.
+name: Relay
+
+on:
+  push:
+    branches: [main]
+    paths: ["relay/**", ".github/workflows/relay.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: relay
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test
+        working-directory: relay
+        run: npm test
+
+      - name: Check Cloudflare secrets
+        id: cf
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$TOKEN" ] || [ -z "$ACCOUNT" ]; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            msg="Relay not deployed: add the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets (README, 'Phone sync server')."
+            echo "::warning::$msg"
+            echo "### $msg" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy
+        if: steps.cf.outputs.ok == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: relay
+          wranglerVersion: "4.159.0"
+          command: deploy
+
+      - name: Check it answers
+        if: steps.cf.outputs.ok == 'true'
+        run: |
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS https://wirl-relay.wirl.workers.dev/ ; then exit 0; fi
+            sleep 10
+          done
+          echo "::error::The relay didn't answer at https://wirl-relay.wirl.workers.dev/"
+          exit 1

@@ -1,11 +1,17 @@
-# Wirl dictionary sync protocol (v1)
+# Wirl dictionary sync protocol (v2: encrypted mailbox)
 
-Wirl for Windows and Wirl for Android keep the personal dictionary in sync over the local Wi-Fi network. There is no server and no cloud account. **Both apps must follow this document exactly.** The reference implementation is `crates/wirl-core/src/sync.rs` (crypto, merge) and `src-tauri/src/sync_server.rs` (HTTP, mDNS, pairing).
+Wirl for Windows and Wirl for Android keep the personal dictionary in sync through a small **mailbox relay** on the internet. There are no accounts and no logins: scanning the computer's QR code is the pairing. Everything is encrypted on the devices before it leaves them, so the relay only ever stores ciphertext. **Both apps must follow this document exactly.**
 
-## Roles
+Reference implementation: `crates/wirl-core/src/sync.rs` (keys, encryption, merge), `crates/wirl-core/src/relay.rs` (relay client, sync round), `relay/` (the Cloudflare Worker), `src-tauri/src/cloud_sync.rs` (desktop scheduling and pairing).
 
-- **Computer** (Wirl Desktop) is the **server**.
-- **Phone** (Wirl Android) is the **client**. It starts every sync.
+v1 (direct Wi-Fi between phone and computer) is retired. A v1 QR code (`"v":1`) must be rejected with "Update Wirl on your computer and scan its new code."
+
+## Overview
+
+- Devices that share one **group secret** form a sync group. A computer creates the secret the first time it shows its pairing code. Every phone that scans the code joins the same group, so they all share one dictionary.
+- Each device derives three values from the secret: the **mailbox id**, the **mailbox token** and the **encryption key** (§3).
+- The mailbox holds one encrypted value (the whole dictionary plus a device list) and a **version** number. Devices read it, merge their own changes, and write it back only if nobody wrote in between (compare-and-swap, §5).
+- There is no server-side merge and no roles: computer and phones run the same sync round (§6).
 
 ## 1. Dictionary entry format
 
@@ -35,130 +41,162 @@ Wirl for Windows and Wirl for Android keep the personal dictionary in sync over 
 
 ## 2. Pairing
 
-On the computer, *Dictionary › Pair with phone* shows a QR code. Its content is this JSON (UTF-8, no extra whitespace required):
+On the computer, *Dictionary › Pair a phone* shows a QR code. On the phone, *Computer sync › Pair with a computer* scans it. The QR content is this JSON (UTF-8):
 
 ```json
 {
-  "v": 1,
-  "deviceId": "0c1a3a0e-8a57-4b0e-9d63-0a2b1d2e3f40",
+  "v": 2,
   "name": "DESKTOP-ABC",
-  "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-  "port": 47913,
-  "hosts": ["192.168.1.23"]
+  "relay": "https://wirl-relay.wirl.workers.dev",
+  "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
 }
 ```
 
 | Field | Meaning |
 |---|---|
-| `v` | Protocol version, `1`. |
-| `deviceId` | The computer's UUID. Stable across restarts. |
+| `v` | Protocol version, `2`. |
 | `name` | The computer's name, for display. |
-| `secret` | Standard base64 (with padding) of **32 random bytes**. New for every QR code. |
-| `port` | TCP port of the sync server (default 47913; the next free port up to 47932 if busy). |
-| `hosts` | The computer's private IPv4 addresses (RFC 1918). |
+| `relay` | Base URL of the mailbox relay (HTTPS). Phones use the URL from the code, so a different relay needs no phone update. |
+| `secret` | Standard base64 (with padding) of the **32-byte group secret**. |
 
-- A QR code's secret is valid for **15 minutes** or until a phone completes its first sync with it, whichever comes first.
-- The first successful sync with a pending secret completes pairing: the computer stores `phoneId → secret` in Windows Credential Manager and the phone's display name in its settings. The phone stores `deviceId → secret` in its own secure storage.
-- **Unpair** deletes the stored secret on that side. Later requests from that phone get `401`.
-- Scanning a new QR code from an already-paired phone replaces that phone's secret (re-pairing).
+- The secret doesn't expire: the computer shows the same code until **Disconnect all phones** (§7) replaces it.
+- Scanning a code for a computer the phone already has (same relay and mailbox id) replaces it; otherwise it's added. A phone may be in several groups (several computers).
+- The phone keeps the secret in secure storage (Android: EncryptedSharedPreferences). The computer keeps it in Windows Credential Manager.
 
-## 3. Discovery
+## 3. Keys
 
-- The computer advertises over mDNS / DNS-SD:
-  - Service type: `_wirl._tcp` (`_wirl._tcp.local.`)
-  - Instance name: the computer's name
-  - Port: the sync port
-  - TXT record: `id=<deviceId>`
-- The phone finds the paired computer by matching `id` to the `deviceId` it stored. If discovery fails, it tries the `hosts` from the QR code (and the last address that worked).
-- The computer only answers peers with private addresses (10/8, 172.16/12, 192.168/16, 169.254/16, loopback; IPv6 link-local / ULA). Others get `403`. Windows Firewall should allow Wirl on **Private** networks only.
+All three values use HKDF-SHA256 (RFC 5869) with **IKM = the 32 decoded secret bytes**, **no salt** (the RFC default: 32 zero bytes) and an output length of 32 bytes. Only the `info` label differs:
 
-## 4. Request
+| Value | `info` (ASCII) | Encoding |
+|---|---|---|
+| Mailbox id | `wirl-mailbox-v2` | 64 lowercase hex characters |
+| Mailbox token | `wirl-token-v2` | URL-safe base64 **without** padding (43 characters) |
+| Encryption key | `wirl-sync-v2` | raw 32 bytes (AES-256 key) |
 
-The phone sends:
+The relay stores **SHA-256(token)** as lowercase hex, never the token. Knowing the mailbox id or the token doesn't reveal the key.
 
-```
-POST http://<host>:<port>/wirl/sync
-Content-Type: application/json
-```
-
-```json
-{
-  "v": 1,
-  "phoneId": "0b7c6f7e-1d2a-4b5c-9d8e-7f6a5b4c3d2e",
-  "phoneName": "Pixel 9",
-  "nonce": "<base64 of 12 random bytes>",
-  "ciphertext": "<base64>"
-}
-```
-
-- `phoneId` is a UUID the phone creates once and keeps.
-- Request plaintext (before encryption):
-
-```json
-{ "entries": [ /* the phone's FULL dictionary, including tombstones */ ] }
-```
-
-## 5. Encryption
+## 4. Encryption
 
 | Item | Value |
 |---|---|
 | Cipher | AES-256-GCM, 12-byte nonce, 16-byte tag |
-| Key | HKDF-SHA256, **IKM = the 32 decoded secret bytes**, **salt = none** (RFC 5869 default: 32 zero bytes), **info = `wirl-sync-v1`** (ASCII), output length 32 bytes |
-| Additional authenticated data | the `phoneId` string, UTF-8 bytes |
-| `ciphertext` | base64 of `encrypted bytes ‖ 16-byte tag` (the standard output of AES-GCM in Java `Cipher`, Rust `aes-gcm`, Python `cryptography`) |
-| `nonce` | base64 of 12 fresh random bytes. **Never reuse** a nonce with the same key. |
-| Encoding | Standard base64 alphabet with `=` padding |
+| Key | the encryption key from §3 |
+| Additional authenticated data | the mailbox id string (64 hex characters), ASCII bytes |
+| `nonce` | standard base64 (with padding) of 12 fresh random bytes. **Never reuse** a nonce. |
+| `ciphertext` | standard base64 of `encrypted bytes ‖ 16-byte tag` (the usual output of Java `Cipher`, Rust `aes-gcm`, Python `cryptography`) |
 
-**Decryption failure means unauthorized.** If no stored or pending secret decrypts the request, the computer returns `401` with an empty body.
+Plaintext (UTF-8 JSON):
+
+```json
+{
+  "entries": [ /* the FULL dictionary, tombstones included */ ],
+  "devices": [
+    { "id": "0b7c6f7e-1d2a-4b5c-9d8e-7f6a5b4c3d2e", "name": "Pixel 9", "kind": "phone", "lastSync": 1767225600000 },
+    { "id": "0c1a3a0e-8a57-4b0e-9d63-0a2b1d2e3f40", "name": "DESKTOP-ABC", "kind": "computer", "lastSync": 1767225500000 }
+  ]
+}
+```
+
+- `devices` lists everyone in the group. Each device's `id` is a UUID it creates once and keeps; `kind` is `"computer"` or `"phone"`; `lastSync` is when that device last uploaded (ms). Devices show the others' names and "Synced X ago" from this list.
+- Unknown fields must be ignored and kept out of the way (don't fail on them).
+
+A value that doesn't decrypt means the device has the wrong secret: treat it as "pair again" (§8).
 
 ### Test vector
+
+Computed independently with Rust (`known_test_vector` in `sync.rs`) and Python's `cryptography` package. The Android app must pass the same vector.
 
 | | |
 |---|---|
 | secret (base64) | `AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=` (bytes 0x00…0x1f) |
-| derived key (hex) | `f2b4a1a6ce55a07aea8ccb22e73d9ad6f36e4e177601c4e0d1be7ad47e6eb66c` |
-| phoneId (AAD) | `0b7c6f7e-1d2a-4b5c-9d8e-7f6a5b4c3d2e` |
+| mailbox id | `edaba0f8f5a6b41660b29dfc43e0c1f9c3067ab5d6cef6c3564a014f7752ee28` |
+| token | `AJz6SLfpq2jeFQJFKtPqDMJjLGr4HmRTVsv4YRMp_Cw` |
+| SHA-256(token) | `81d430e62ca3afa96592b7a7c50f6213ccbde0fd21a6cebfa6b0d5038facb16c` |
+| encryption key (hex) | `beccb5b399d59b7385c4d5d5df2090be773deaf000144a2b2caa2a567232e841` |
 | nonce (base64) | `AAECAwQFBgcICQoL` (bytes 0x00…0x0b) |
-| plaintext | `{"entries":[]}` |
-| ciphertext (base64) | `T4GGLLyKJaiy63rNMucjUgABVlyT/DGPB7LUjk1Z` |
+| plaintext | `{"entries":[],"devices":[]}` |
+| ciphertext (base64) | `UcqqKN+j0S2YVtLI2StUerwpqF/KNKjI1Hzcac50dzPtEw5tYv5gpse67A==` |
 
-This vector is checked by the desktop unit tests (`known_test_vector`) and was cross-checked with Python's `cryptography` package.
+## 5. Relay API
 
-## 6. Response
+Base URL from the QR code, for example `https://wirl-relay.wirl.workers.dev`. Every mailbox request carries `Authorization: Bearer <token>`. Bodies are JSON.
 
-On success the computer returns `200` with:
+### `GET {relay}/v2/m/{mailboxId}`
 
-```json
-{ "nonce": "<base64 12 bytes>", "ciphertext": "<base64>" }
-```
+| Status | Body | Meaning |
+|---|---|---|
+| 200 | `{"version": 3, "nonce": "…", "ciphertext": "…"}` | The current value. |
+| 404 | none | Empty mailbox (never written, or expired). |
+| 401 | none | The mailbox belongs to a different token. |
+| 410 | none | The mailbox was closed (§7). |
 
-encrypted exactly the same way (same key, AAD = the same `phoneId`, fresh nonce). Plaintext:
+### `PUT {relay}/v2/m/{mailboxId}`
 
-```json
-{ "entries": [ /* the computer's FULL dictionary after merging, including tombstones */ ] }
-```
+Body: `{"baseVersion": 3, "nonce": "…", "ciphertext": "…"}`. `baseVersion` is the version the device read (0 for an empty mailbox). `nonce` must be 16 base64 characters.
 
-The phone replaces its dictionary with this list. **Both sides end with identical dictionaries.**
+| Status | Body | Meaning |
+|---|---|---|
+| 200 | `{"version": 4}` | Stored. The new version is `baseVersion + 1`. |
+| 409 | `{"version": 5, "nonce": "…", "ciphertext": "…"}` | Someone wrote first. This is the current value: merge with it and try again. |
+| 400 | none | Malformed body. |
+| 401 / 410 | none | As for GET. |
+| 413 | none | Body over 1 MiB. |
 
-| Status | Meaning |
+An empty or expired mailbox accepts any `baseVersion` (the writer's merged data is the best there is). The first successful write sets the mailbox's token.
+
+### `DELETE {relay}/v2/m/{mailboxId}`
+
+Closes the mailbox: the dictionary is deleted and every later request with that token gets **410**. Answers 204 (also for an empty mailbox, which then becomes closed).
+
+### Other rules
+
+- `GET {relay}/` answers 200 with plain text (a health check).
+- A mailbox nobody has touched for **180 days** is deleted (closed markers too).
+- Requests for the same mailbox are handled one at a time, so compare-and-swap is reliable.
+
+## 6. Sync round
+
+Every device runs the same round:
+
+1. **GET** the mailbox. 404 → no remote value, version 0.
+2. **Decrypt** the value (if any).
+3. **Merge** entries (§9). Drop tombstones older than 90 days. This merged list becomes the local dictionary.
+4. **Decide whether to upload.** Upload if the merged entries differ from the mailbox's entries (compare sorted by `id`), or this device's record in `devices` is missing, has a different name or kind, or its `lastSync` is **15 minutes** old or more (a heartbeat, so others can show "Synced X ago").
+5. **Upload**: `devices` = the mailbox's devices merged with this device's record (`lastSync` = now). Per `id`, the larger `lastSync` wins; drop devices not seen for **180 days**. PUT with `baseVersion` = the version read in step 1.
+6. On **409**: use the returned value as the new remote and go back to step 2. Give up after 5 conflicts in one round (try again on the next round).
+
+After a round, a device applies the result by merging it (§9) with its current dictionary, in case the user edited something while the round was running.
+
+## 7. Disconnect all phones
+
+On the computer, *Disconnect all phones* sends `DELETE` for the current mailbox, makes a **new** secret, and syncs its dictionary into the new mailbox. Phones on the old secret get **410** and show "pair again". The user re-scans the new code with the phones that should stay. (Removing a single phone would need accounts; this is the trade-off for having none.)
+
+A phone's own *Unpair* only forgets the computer locally. It doesn't touch the mailbox.
+
+## 8. Errors (what devices show)
+
+| Situation | Message |
 |---|---|
-| 200 | Synced. Body as above. |
-| 400 | Malformed JSON, wrong `v`, or `phoneId` not a UUID. |
-| 401 | Decryption failed (wrong or unknown secret, tampered data). Empty body. |
-| 403 | Request came from a non-private address. |
-| 413 | Body larger than 8 MB. |
+| 401, 410, or the value doesn't decrypt | "Pairing is no longer valid. Pair again." (phone: with a **Pair again** button) |
+| No connection, timeout, DNS failure | "Can't reach the sync service. Will try again." |
+| 5xx, or too many conflicts | "Sync didn't finish. Will try again." |
 
-## 7. Merge rule
+Failures are also logged in Diagnostics. Sync never blocks dictation or cleanup.
+
+## 9. Merge rule
 
 For each `id` present on either side:
 
 1. The version with the **newer `updatedAt` wins**.
 2. On a tie, the version with **`deleted: true` wins**.
-3. On a full tie (same `updatedAt` and `deleted`), pick the version whose canonical JSON serialization sorts greater. (This only matters if two devices produce different content in the same millisecond. The phone simply adopts the computer's merged list, so both sides still match.)
+3. On a full tie (same `updatedAt` and `deleted`), pick the version whose canonical JSON serialization sorts greater, so every device picks the same one.
 
-The computer then purges tombstones older than 90 days. The result is returned sorted by `id`.
+The result is sorted by `id`.
 
-## 8. When to sync
+## 10. When to sync
 
-- The phone syncs when it joins Wi-Fi, when the dictionary changes (debounced), and when the user opens the dictionary.
-- The computer shows "Synced X min ago" per paired phone.
+**Computer:** on launch, about 2 seconds after any dictionary change (a burst of edits is one sync), when the Dictionary page opens, on *Sync now*, and every **5 minutes** while Wirl runs.
+
+**Phone:** when the Dictionary or Computer sync screen opens (in the foreground, with a "Syncing…" indicator), right after scanning a code, about 2 seconds after a dictionary change, when the network comes back, and every 30 minutes in the background (WorkManager).
+
+Network timeouts: connect 10 s, whole request 20 s.

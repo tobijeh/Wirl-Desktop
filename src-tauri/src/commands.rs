@@ -12,7 +12,7 @@ use tauri_plugin_dialog::DialogExt;
 use wirl_core::dictionary::split_sounds_like;
 use wirl_core::hotkey::{default_for, find_conflict, Action, Hotkey, RecordResult, ShortcutRecorder};
 use wirl_core::models::{self, human_size, MODELS};
-use wirl_core::settings::{language_label, ModelId, Settings, LANGUAGES};
+use wirl_core::settings::{ModelId, Settings, LANGUAGES};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -38,6 +38,7 @@ pub fn get_state() -> Value {
                 "id": m.id, "name": m.name, "description": m.description,
                 "sizeLabel": human_size(m.size), "ready": a.model_ready(m.id),
                 "download": d, "englishOnly": m.english_only,
+                "fixedLanguage": models::fixed_language(m.id),
             })
         })
         .collect();
@@ -79,7 +80,7 @@ pub fn get_state() -> Value {
             "paired": !phones.is_empty(),
         },
         "models": models,
-        "modelSummary": format!("{} · {}", models::info(s.model).name, language_label(&models::effective_language(s.model, &s.language))),
+        "modelSummary": models::summary(s.model, &s.language),
         "languages": LANGUAGES,
         "dictionary": { "count": count, "entries": entries },
         "phones": phones,
@@ -156,9 +157,10 @@ pub fn ensure_model(id: ModelId) {
     let a = app::get();
     if a.model_ready(id) {
         let path = a.model_path(id).to_string_lossy().to_string();
+        let engine = models::info(id).engine;
         let sc = a.sidecar.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(e) = sc.load(&path).await {
+            if let Err(e) = sc.load(engine, &path).await {
                 log::error!("load model: {e}");
             }
         });
@@ -186,26 +188,39 @@ pub fn download_model(id: ModelId) -> CmdResult<()> {
     tauri::async_runtime::spawn(async move {
         let info = models::info(id);
         let a2 = a.clone();
+        let a3 = a.clone();
         let mut last_emit = std::time::Instant::now();
-        let r = models::download::download(&a.http, info, &a.paths.models, cancel, move |done, total| {
-            {
-                let mut d = a2.downloads.lock();
-                let e = d.entry(id).or_default();
-                e.done = done;
-                e.total = total;
-            }
-            if last_emit.elapsed().as_millis() > 200 || done == total {
-                last_emit = std::time::Instant::now();
-                let _ = a2
-                    .handle
-                    .emit("wirl://download", json!({ "id": id, "done": done, "total": total }));
-            }
-        })
+        let unpacking = move || {
+            a3.downloads.lock().entry(id).or_default().unpacking = true;
+            a3.notify();
+        };
+        let r = models::download::download(
+            &a.http,
+            info,
+            &a.paths.models,
+            cancel,
+            move |done, total| {
+                {
+                    let mut d = a2.downloads.lock();
+                    let e = d.entry(id).or_default();
+                    e.done = done;
+                    e.total = total;
+                }
+                if last_emit.elapsed().as_millis() > 200 || done == total {
+                    last_emit = std::time::Instant::now();
+                    let _ = a2
+                        .handle
+                        .emit("wirl://download", json!({ "id": id, "done": done, "total": total }));
+                }
+            },
+            unpacking,
+        )
         .await;
         {
             let mut d = a.downloads.lock();
             let e = d.entry(id).or_default();
             e.active = false;
+            e.unpacking = false;
             e.error = r.as_ref().err().map(|e| e.to_string());
         }
         match r {

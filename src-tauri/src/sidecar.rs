@@ -1,10 +1,13 @@
-//! Runs Whisper in a separate process. If it crashes or runs out of memory
-//! the app keeps going: pending requests fail, the reason is logged, and the
-//! sidecar is restarted with the same model loaded.
+//! Runs the speech engine in a separate process. If it crashes, hangs or
+//! runs out of memory the app keeps going: pending requests fail, the reason
+//! is logged, and the sidecar is restarted with the same model loaded.
 //!
-//! Two builds ship: `wirl-whisper` (Vulkan GPU, falls back to CPU inside
-//! whisper.cpp when no GPU) and `wirl-whisper-cpu` (no Vulkan dependency).
-//! If the GPU build can't start or load a model, the CPU build is used.
+//! Whisper ships as two builds: `wirl-whisper` (Vulkan GPU, falls back to
+//! CPU inside whisper.cpp when no GPU) and `wirl-whisper-cpu` (no Vulkan
+//! dependency). If the GPU build can't start or load a model, the CPU build
+//! is used. The Cantonese model runs in `wirl-sensevoice` (sherpa-onnx).
+//! One engine process runs at a time; switching models between engines
+//! stops one and starts the other.
 
 use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
@@ -19,6 +22,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{oneshot, Mutex as AsyncMutex};
 use wirl_core::ipc::{encode_pcm, Request, Response};
+use wirl_core::models::Engine;
 
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<(String, u64), String>>>>>;
 type RestartHook = Arc<dyn Fn(String) + Send + Sync>;
@@ -39,6 +43,7 @@ pub struct SidecarStatus {
     pub cpu_only: bool,
     pub restarts: u32,
     pub last_error: Option<String>,
+    pub engine: Option<Engine>,
 }
 
 pub struct Sidecar {
@@ -48,7 +53,9 @@ pub struct Sidecar {
     next_id: AtomicU64,
     generation: AtomicU64,
     cpu_only: AtomicBool,
-    want_model: Mutex<Option<String>>,
+    /// Engine of the running process (or the one to start next).
+    engine: Mutex<Engine>,
+    want_model: Mutex<Option<(Engine, String)>>,
     status: Arc<Mutex<SidecarStatus>>,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     on_restart: Mutex<Option<RestartHook>>,
@@ -64,11 +71,11 @@ fn exe_name(base: &str) -> String {
 }
 
 /// Bundled sidecars sit next to the main executable.
-fn binary_path(cpu_only: bool) -> Option<PathBuf> {
-    let names: &[&str] = if cpu_only {
-        &["wirl-whisper-cpu"]
-    } else {
-        &["wirl-whisper", "wirl-whisper-cpu"]
+fn binary_path(engine: Engine, cpu_only: bool) -> Option<PathBuf> {
+    let names: &[&str] = match engine {
+        Engine::SenseVoice => &["wirl-sensevoice"],
+        Engine::Whisper if cpu_only => &["wirl-whisper-cpu"],
+        Engine::Whisper => &["wirl-whisper", "wirl-whisper-cpu"],
     };
     let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     for n in names {
@@ -89,6 +96,7 @@ impl Sidecar {
             next_id: AtomicU64::new(1),
             generation: AtomicU64::new(0),
             cpu_only: AtomicBool::new(false),
+            engine: Mutex::new(Engine::Whisper),
             want_model: Mutex::new(None),
             status: Arc::new(Mutex::new(SidecarStatus::default())),
             stderr_tail: Arc::new(Mutex::new(VecDeque::new())),
@@ -104,6 +112,7 @@ impl Sidecar {
     pub fn status(&self) -> SidecarStatus {
         let mut s = self.status.lock().clone();
         s.cpu_only = self.cpu_only.load(Ordering::Relaxed);
+        s.engine = Some(*self.engine.lock());
         s
     }
 
@@ -114,7 +123,8 @@ impl Sidecar {
 
     async fn spawn(self: &Arc<Self>) -> Result<(), String> {
         let cpu_only = self.cpu_only.load(Ordering::Relaxed);
-        let path = binary_path(cpu_only).ok_or("Speech engine is missing. Please reinstall Wirl.")?;
+        let engine = *self.engine.lock();
+        let path = binary_path(engine, cpu_only).ok_or("Speech engine is missing. Please reinstall Wirl.")?;
         let mut cmd = Command::new(&path);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -245,8 +255,8 @@ impl Sidecar {
         Box::pin(async move {
             tokio::time::sleep(delay).await;
             let model = self.want_model.lock().clone();
-            if let Some(model) = model {
-                if let Err(e) = self.load(&model).await {
+            if let Some((engine, model)) = model {
+                if let Err(e) = self.load(engine, &model).await {
                     log::error!("reload after restart failed: {e}");
                 }
             }
@@ -291,17 +301,29 @@ impl Sidecar {
         Ok(())
     }
 
-    /// Loads a model and keeps it loaded. Falls back to the CPU build if
-    /// the GPU build fails to load.
-    pub async fn load(self: &Arc<Self>, model_path: &str) -> Result<bool, String> {
-        *self.want_model.lock() = Some(model_path.to_string());
+    /// Loads a model and keeps it loaded, starting the right engine for it.
+    /// Whisper falls back to the CPU build if the GPU build fails to load.
+    pub async fn load(self: &Arc<Self>, engine: Engine, model_path: &str) -> Result<bool, String> {
+        *self.want_model.lock() = Some((engine, model_path.to_string()));
+        let switching = {
+            let mut e = self.engine.lock();
+            let switching = *e != engine;
+            *e = engine;
+            switching
+        };
+        if switching {
+            // Stop the other engine; ensure_running starts this one.
+            log::info!("switching speech engine to {engine:?}");
+            self.kill().await;
+        }
         if self.is_loaded(model_path) {
             return Ok(self.status.lock().gpu);
         }
-        let result = self.load_once(model_path, !self.cpu_only.load(Ordering::Relaxed)).await;
+        let whisper_gpu = engine == Engine::Whisper && !self.cpu_only.load(Ordering::Relaxed);
+        let result = self.load_once(model_path, whisper_gpu).await;
         match result {
             Ok(gpu) => Ok(gpu),
-            Err(e) if !self.cpu_only.load(Ordering::Relaxed) => {
+            Err(e) if whisper_gpu => {
                 log::warn!("GPU speech engine failed ({e}); switching to CPU");
                 self.cpu_only.store(true, Ordering::Relaxed);
                 self.kill().await;
@@ -346,9 +368,9 @@ impl Sidecar {
         timeout: Duration,
     ) -> Result<(String, u64), String> {
         let want = self.want_model.lock().clone();
-        if let Some(m) = want {
+        if let Some((engine, m)) = want {
             if !self.is_loaded(&m) {
-                self.load(&m).await?;
+                self.load(engine, &m).await?;
             }
         } else {
             return Err("No speech model selected".into());

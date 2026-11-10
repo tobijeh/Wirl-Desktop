@@ -187,17 +187,27 @@ function modelCard(m) {
   const d = m.download || {};
   let right;
   if (m.ready) right = `<span class="pill-tag ok">Ready</span>`;
+  else if (d.unpacking) right = "";
   else if (d.active) right = `<button data-act="cancel-download" data-id="${m.id}">Cancel</button>`;
   else right = `<button data-act="download" data-id="${m.id}">Download · ${esc(m.sizeLabel)}</button>`;
   const pct = d.total ? Math.round((d.done / d.total) * 100) : 0;
+  // Picked but not downloaded yet (or the download stopped): say so plainly.
+  const needs =
+    selected && !m.ready && !d.active
+      ? `<div class="warning-box" style="margin-top:12px">Download this model to dictate with it (${esc(m.sizeLabel)}, one time). Until then, dictation won't work.</div>`
+      : selected && !m.ready
+        ? `<div class="muted small" style="margin-top:6px">Dictation works as soon as the download finishes.</div>`
+        : "";
+  const label = d.unpacking ? "Unpacking…" : `${pct}%`;
   return `<div class="card clickable ${selected ? "selected" : ""}" data-act="select-model" data-id="${m.id}">
     <div class="row">
       <div class="grow"><h3>${esc(m.name)}${selected ? ` <span class="muted small">· selected</span>` : ""}</h3>
         <div class="muted">${esc(m.description)}</div></div>
       ${right}
     </div>
-    ${d.active ? `<div class="progress"><div data-progress="${m.id}" style="width:${pct}%"></div></div><div class="muted small" data-progress-label="${m.id}" style="margin-top:6px">${pct}%</div>` : ""}
+    ${d.active ? `<div class="progress"><div data-progress="${m.id}" style="width:${d.unpacking ? 100 : pct}%"></div></div><div class="muted small" data-progress-label="${m.id}" style="margin-top:6px">${label}</div>` : ""}
     ${d.error ? `<div class="error-text">${esc(d.error)}</div>` : ""}
+    ${needs}
   </div>`;
 }
 
@@ -205,6 +215,8 @@ function pageDictation() {
   const s = S.settings;
   const model = S.models.find((m) => m.id === s.model);
   const englishOnly = model?.englishOnly;
+  const fixed = model?.fixedLanguage;
+  const cantonese = fixed && !englishOnly;
   return `<div class="page">
     <h1>Dictation</h1>
     <p class="lead">Speech is turned into text on this computer. Models download once when you pick them.</p>
@@ -212,9 +224,13 @@ function pageDictation() {
     ${S.models.map(modelCard).join("")}
     <h2>Language</h2>
     <div class="card">
-      <select data-setting="language" ${englishOnly ? "disabled" : ""}>
+      ${
+        cantonese
+          ? `<div class="muted">Cantonese, with English words kept in English. Text is written in traditional characters.</div>`
+          : `<select data-setting="language" ${englishOnly ? "disabled" : ""}>
         ${S.languages.map(([c, l]) => `<option value="${c}" ${(englishOnly ? "en" : s.language) === c ? "selected" : ""}>${esc(l)}</option>`).join("")}
-      </select>
+      </select>`
+      }
       ${englishOnly ? `<div class="muted small" style="margin-top:8px">This model understands English only. Choose Multilingual for other languages.</div>` : ""}
     </div>
     <div class="card row">
@@ -1135,7 +1151,8 @@ listen("wirl://download", (e) => {
   const { id, done, total } = e.payload;
   const pct = total ? Math.round((done / total) * 100) : 0;
   const m = S?.models.find((x) => x.id === id);
-  if (m) m.download = { ...(m.download || {}), done, total, active: done < total };
+  // The Cantonese model is unpacked after downloading; the state update says so.
+  if (m) m.download = { ...(m.download || {}), done, total, active: done < total || !!m.download?.unpacking };
   document.querySelectorAll(`[data-progress="${id}"]`).forEach((b) => (b.style.width = `${pct}%`));
   document.querySelectorAll(`[data-progress-label="${id}"]`).forEach((b) => (b.textContent = `${pct}%`));
 });

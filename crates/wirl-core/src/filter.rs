@@ -22,6 +22,9 @@ const HALLUCINATIONS: &[&str] = &[
     "subtitles by the amaraorg community",
     "transcribed by",
     "you",
+    // SenseVoice on background noise.
+    "嗯",
+    "呃",
 ];
 
 fn tag_re() -> &'static Regex {
@@ -120,5 +123,61 @@ mod tests {
     #[test]
     fn punctuation_only_is_empty() {
         assert_eq!(filter_transcript(" . , ..."), "");
+    }
+}
+
+/// SenseVoice writes English words in capitals ("个 MEETING"). Lower-cases
+/// all-capital words of two or more letters so the text reads normally even
+/// with AI cleanup off; "I" and mixed-case words are left alone.
+pub fn sensevoice_case(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        if word.chars().count() >= 2 && word.chars().all(|c| c.is_ascii_uppercase()) {
+            out.push_str(&word.to_ascii_lowercase());
+        } else {
+            out.push_str(word);
+        }
+        word.clear();
+    };
+    for c in text.chars() {
+        if c.is_ascii_alphabetic() {
+            word.push(c);
+        } else {
+            flush(&mut word, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
+#[cfg(test)]
+mod sensevoice_tests {
+    use super::*;
+
+    #[test]
+    fn capitals_become_lower_case() {
+        assert_eq!(
+            sensevoice_case("我今日有个 MEETING 之后要 SEND 个 EMAIL"),
+            "我今日有个 meeting 之后要 send 个 email"
+        );
+        assert_eq!(sensevoice_case("I said OK to iPhone"), "I said ok to iPhone");
+        assert_eq!(sensevoice_case(""), "");
+    }
+
+    #[test]
+    fn lone_chinese_filler_is_no_speech() {
+        assert_eq!(filter_transcript("嗯"), "");
+        assert_eq!(filter_transcript("呃。"), "");
+        assert_eq!(filter_transcript("嗯好啊"), "嗯好啊");
+    }
+
+    #[test]
+    fn chinese_survives_the_filter() {
+        assert_eq!(
+            filter_transcript("呢几个字都表达唔到我想讲嘅意思"),
+            "呢几个字都表达唔到我想讲嘅意思"
+        );
     }
 }

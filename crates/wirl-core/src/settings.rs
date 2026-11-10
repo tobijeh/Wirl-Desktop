@@ -16,6 +16,8 @@ pub enum ModelId {
     Accurate,
     /// base (multilingual)
     Multilingual,
+    /// SenseVoice (sherpa-onnx), Cantonese with English mixed in.
+    Cantonese,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

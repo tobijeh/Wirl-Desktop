@@ -42,13 +42,41 @@ Rules:
 - Never describe sounds or noises. If there are no intended words, return nothing.
 - Return only the final text, with no preamble, notes, or quotes.";
 
+/// Added after the core prompt when the Cantonese model produced the
+/// transcript. Must stay identical to the Android app (docs/cantonese.md).
+pub const CANTONESE_BLOCK: &str = "--- CANTONESE MODE ---
+The speaker is talking Cantonese, often mixed with English.
+- Write exactly as spoken, in written spoken Cantonese (口語), in traditional characters (Hong Kong style). For example: 佢, 嘅, 唔, 咗, 喺, 啲, 咁, 冇, 嚟, 睇.
+- Never rewrite into formal written Chinese (書面語) or Mandarin phrasing, and never use simplified characters.
+- Keep English words and phrases in English, exactly where they were spoken.
+- If the transcript uses Mandarin-style characters where the speaker clearly said Cantonese, correct them to the Cantonese characters.
+- Remove pure filler sounds (such as 呃 and 嗯) and false starts. Keep sentence-final particles (such as 呀, 啦, 喎, 囉, 嘛, 㗎, 啩) because they carry meaning and tone.
+- Use full-width Chinese punctuation (，。？！：) in Chinese text.
+- Polish lightly. The result should read like the speaker typed it themselves in a message.
+- Apply the personal dictionary as usual.
+--- END CANTONESE MODE ---";
+
+/// Which extra instructions go with the core prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PromptMode {
+    #[default]
+    Standard,
+    /// The transcript came from the Cantonese model.
+    Cantonese,
+}
+
 pub const STYLE_HEADER: &str = "Speaker's style preferences:";
 pub const DICTIONARY_HEADER: &str = "Always spell these terms exactly as written. If a word sounds like a term or matches a listed mishearing, and the context fits the note, replace it with the term:";
 
-/// Builds the full system prompt: core prompt, then optional style notes,
-/// then the dictionary entries that plausibly match this dictation.
-pub fn build_system_prompt(style_notes: &str, entries: &[&Entry]) -> String {
+/// Builds the full system prompt: core prompt (plus the Cantonese block in
+/// Cantonese mode), then optional style notes, then the dictionary entries
+/// that plausibly match this dictation.
+pub fn build_system_prompt(mode: PromptMode, style_notes: &str, entries: &[&Entry]) -> String {
     let mut s = String::from(CORE_PROMPT);
+    if mode == PromptMode::Cantonese {
+        s.push_str("\n\n");
+        s.push_str(CANTONESE_BLOCK);
+    }
     let style = style_notes.trim();
     if !style.is_empty() {
         s.push_str("\n\n");
@@ -125,7 +153,7 @@ mod tests {
 
     #[test]
     fn request_has_thinking_off_and_exact_core_prompt() {
-        let sys = build_system_prompt("", &[]);
+        let sys = build_system_prompt(PromptMode::Standard, "", &[]);
         assert_eq!(sys, CORE_PROMPT);
         let req = build_request(&sys, "hello there", true);
         assert_eq!(req["model"], "claude-haiku-5-5");
@@ -149,7 +177,7 @@ mod tests {
     #[test]
     fn style_and_dictionary_appended_in_order() {
         let e = Entry::new("Sela", vec!["salad".into(), "sella".into()], "my daughter's name");
-        let sys = build_system_prompt("  Use British spelling.  ", &[&e]);
+        let sys = build_system_prompt(PromptMode::Standard, "  Use British spelling.  ", &[&e]);
         let style_at = sys.find(STYLE_HEADER).unwrap();
         let dict_at = sys.find(DICTIONARY_HEADER).unwrap();
         assert!(style_at > CORE_PROMPT.len() - 1);
@@ -159,8 +187,32 @@ mod tests {
     }
 
     #[test]
+    fn cantonese_block_sits_between_core_prompt_and_style() {
+        let e = Entry::new("Sela", vec!["salad".into()], "");
+        let sys = build_system_prompt(PromptMode::Cantonese, "Short sentences.", &[&e]);
+        assert!(sys.starts_with(&format!("{CORE_PROMPT}\n\n{CANTONESE_BLOCK}\n\n{STYLE_HEADER}")));
+        assert!(sys.find(DICTIONARY_HEADER).unwrap() > sys.find(STYLE_HEADER).unwrap());
+        assert!(!build_system_prompt(PromptMode::Standard, "", &[]).contains("CANTONESE"));
+        assert_eq!(
+            build_system_prompt(PromptMode::Cantonese, "", &[]),
+            format!("{CORE_PROMPT}\n\n{CANTONESE_BLOCK}")
+        );
+    }
+
+    #[test]
+    fn cantonese_block_matches_docs() {
+        // docs/cantonese.md holds the copy shared with the Android app.
+        // Windows checkouts may turn line endings into \r\n.
+        let doc = include_str!("../../../docs/cantonese.md").replace("\r\n", "\n");
+        assert!(doc.contains(&format!("```text\n{CANTONESE_BLOCK}\n```")));
+        assert!(CANTONESE_BLOCK.starts_with("--- CANTONESE MODE ---\n"));
+        assert!(CANTONESE_BLOCK.ends_with("\n--- END CANTONESE MODE ---"));
+        assert_eq!(CANTONESE_BLOCK.lines().count(), 11);
+    }
+
+    #[test]
     fn empty_style_is_omitted() {
-        let sys = build_system_prompt("   \n ", &[]);
+        let sys = build_system_prompt(PromptMode::Standard, "   \n ", &[]);
         assert!(!sys.contains(STYLE_HEADER));
     }
 

@@ -1,8 +1,13 @@
-# Builds both Whisper sidecars for Windows x64 and puts them where Tauri
+# Builds the speech sidecars for Windows x64 and puts them where Tauri
 # bundles them (src-tauri/binaries/<name>-<target-triple>.exe).
 #
 #   wirl-whisper      Vulkan GPU build (whisper.cpp uses the CPU if no GPU)
 #   wirl-whisper-cpu  CPU-only build, used if the Vulkan build can't start
+#   wirl-sensevoice   Cantonese model (SenseVoice through sherpa-onnx). Its
+#                     build downloads the official static sherpa-onnx +
+#                     onnxruntime libraries (built with /MT), so it links the
+#                     C runtime statically too (+crt-static): one self-contained
+#                     .exe, no DLLs.
 #
 # Both are Release builds with AVX2 and no "native" CPU tuning, so they run
 # on any x64 machine with AVX2, not just the build machine.
@@ -30,6 +35,16 @@ $env:GGML_AVX512 = "OFF"
 $triple = "x86_64-pc-windows-msvc"
 $out = Join-Path $PSScriptRoot "..\src-tauri\binaries"
 New-Item -ItemType Directory -Force -Path $out | Out-Null
+
+Write-Host "Building SenseVoice sidecar..."
+$svDir = Join-Path $TargetRoot "sv"
+$oldFlags = $env:RUSTFLAGS
+$env:RUSTFLAGS = "-C target-feature=+crt-static"
+cargo build --release -p wirl-sensevoice --target $triple --target-dir $svDir
+$svExit = $LASTEXITCODE
+$env:RUSTFLAGS = $oldFlags
+if ($svExit -ne 0) { throw "SenseVoice sidecar build failed" }
+Copy-Item (Join-Path $svDir "$triple/release/wirl-sensevoice.exe") (Join-Path $out "wirl-sensevoice-$triple.exe") -Force
 
 Write-Host "Building CPU sidecar..."
 cargo build --release -p wirl-whisper --target $triple --target-dir $cpuDir

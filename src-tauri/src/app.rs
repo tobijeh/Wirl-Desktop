@@ -33,6 +33,8 @@ pub struct DownloadState {
     pub total: u64,
     pub error: Option<String>,
     pub active: bool,
+    /// Downloaded and being unpacked (the Cantonese model).
+    pub unpacking: bool,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]

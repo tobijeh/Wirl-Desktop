@@ -24,5 +24,10 @@
   { "name": "Casual tone kept", "input": "hey dude um wanna grab tacos later lol", "contains": ["tacos", "lol"], "notContains": ["Dear", " um "] },
   { "name": "Filler words removed", "input": "um so uh I was thinking you know we could like start early", "notContains": ["um ", "uh ", "you know"], "contains": ["start early"] },
   { "name": "No intended words", "input": "um uh hmm", "equals": "" },
-  { "name": "Style notes applied", "input": "what color is your favorite car", "style": "Use British spelling.", "contains": ["colour", "favourite"] }
+  { "name": "Style notes applied", "input": "what color is your favorite car", "style": "Use British spelling.", "contains": ["colour", "favourite"] },
+  { "name": "Cantonese: English kept, traditional characters", "cantonese": true, "input": "我今日下昼有个 meeting 之后要 send 个 email 俾我老板", "contains": ["下晝", "meeting", "send", "email", "老闆"], "containsAny": ["，", "。"], "notContains": ["个", "板", "后", "下午"] },
+  { "name": "Cantonese: particles kept, filler removed", "cantonese": true, "input": "呃你 book 咗听日晚饭未啊 嗯 我想去间新开嘅日本餐厅", "contains": ["book", "咗", "聽日", "晚飯", "嘅"], "containsAny": ["？"], "notContains": ["呃", "嗯", "听", "饭"] },
+  { "name": "Cantonese: stays spoken, not formal Chinese", "cantonese": true, "input": "佢话个 presentation 好成功个 client 好钟意", "contains": ["佢", "presentation", "client", "鍾意"], "notContains": ["他", "喜歡", "说"] },
+  { "name": "Cantonese: self-correction", "cantonese": true, "input": "我哋三点 唔系 四点喺铜锣湾等", "contains": ["我哋", "四點", "銅鑼灣", "喺"], "notContains": ["三點", "我們"] },
+  { "name": "Cantonese: dictionary term", "cantonese": true, "input": "听日同西拉去饮茶", "dictionary": [{ "term": "Sela", "soundsLike": ["西拉"] }], "contains": ["Sela", "飲茶", "聽日"], "notContains": ["西拉"] }
 ]

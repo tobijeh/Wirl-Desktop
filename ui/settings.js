@@ -184,34 +184,42 @@ function shortcutCard() {
 }
 
 function modelCard(m) {
-  const s = S.settings;
-  const selected = s.model === m.id;
   const d = m.download || {};
   const pct = d.total ? Math.round((d.done / d.total) * 100) : 0;
   const partialPct = m.partial && m.total ? Math.round((m.partial / m.total) * 100) : 0;
   const confirming = ui.confirmDeleteModel === m.id;
+  // Quick switch tick box: only a downloaded model can be ticked; the model
+  // in use always counts as ticked.
+  const tick = `<button class="tick ${m.ticked ? "on" : ""}" data-act="tick" data-id="${m.id}" ${m.ready ? "" : "disabled"}
+      role="checkbox" aria-checked="${m.ticked}" aria-label="Quick switch: ${esc(m.name)}" title="${m.ready ? "Quick switch" : "Download it first"}">${m.ticked ? "✓" : ""}</button>`;
   let right;
-  if (m.ready) right = `<span class="pill-tag ok">Ready</span><button data-act="delete-model" data-id="${m.id}">Delete</button>`;
+  if (m.ready)
+    right = `${m.inUse ? "" : `<button data-act="use-model" data-id="${m.id}">Use now</button>`}<button data-act="delete-model" data-id="${m.id}">Delete</button>`;
   else if (d.unpacking) right = "";
   else if (d.active) right = `<button data-act="cancel-download" data-id="${m.id}">Cancel</button>`;
   else if (m.partial) right = `<button data-act="download" data-id="${m.id}">Resume download</button>`;
   else right = `<button data-act="download" data-id="${m.id}">Download (${esc(m.sizeLabel)})</button>`;
-  // Picked but not downloaded yet (or the download stopped): say so plainly.
+  let status = "";
+  if (m.ready && m.inUse) status = `<span class="ok-text">Ready · In use now</span>`;
+  else if (m.ready && !m.ticked) status = "Ready · Tick to add it to quick switch";
+  else if (m.ready) status = "Ready";
+  // In use but not downloaded yet (or the download stopped): say so plainly.
   const needs =
-    selected && !m.ready && !d.active
+    m.inUse && !m.ready && !d.active
       ? `<div class="warning-box" style="margin-top:12px">Not downloaded yet, so dictation won't work with this model. Click ${m.partial ? "Resume download" : `Download (${esc(m.sizeLabel)})`} to use it.</div>`
-      : selected && !m.ready
+      : m.inUse && !m.ready
         ? `<div class="muted small" style="margin-top:6px">Dictation works as soon as the download finishes.</div>`
         : "";
   const deleteText = m.shared
     ? "Delete the Cantonese and Mandarin model? Both use the same files. You can download it again later."
     : `Delete the ${esc(m.name)} model? You can download it again later.`;
   const label = d.unpacking ? "Unpacking…" : `${pct}%`;
-  return `<div class="card clickable ${selected ? "selected" : ""}" data-act="select-model" data-id="${m.id}">
+  return `<div class="card model-card ${m.inUse ? "selected" : ""}">
     <div class="row">
-      <div class="grow"><h3>${esc(m.name)}${selected ? ` <span class="muted small">· selected</span>` : ""}</h3>
+      ${tick}
+      <div class="grow"><h3>${esc(m.name)}</h3>
         <div class="muted">${esc(m.description)}</div>
-        <div class="muted small" style="margin-top:4px">${esc(m.sizeNote)}</div></div>
+        <div class="muted small" style="margin-top:4px">${status ? `${status} · ` : ""}${esc(m.sizeNote)}</div></div>
       <div class="row" style="gap:8px;flex:none">${right}</div>
     </div>
     ${d.active ? `<div class="progress"><div data-progress="${esc(m.file)}" style="width:${d.unpacking ? 100 : pct}%"></div></div><div class="muted small" data-progress-label="${esc(m.file)}" style="margin-top:6px">${label}</div>` : ""}
@@ -234,6 +242,7 @@ function pageDictation() {
     <h1>Dictation</h1>
     <p class="lead">Speech is turned into text on this computer. Pick the model for the language you speak; it downloads once.</p>
     <h2>Speech model</h2>
+    <p class="muted" style="margin:-4px 0 12px">Tick the models you want to use. With more than one ticked, press <kbd>${esc(S.hotkeys.switchModel)}</kbd> to switch between them, even while recording.</p>
     ${S.models.map(modelCard).join("")}
     <div class="card row">
       <div class="grow"><h3>Pause media while dictating</h3><div class="muted">Music and videos pause while you talk and resume after.</div></div>
@@ -368,6 +377,7 @@ const HOTKEY_ROWS = [
   ["dictate", "Dictate", "Tap to start and stop. With Hold to talk on, hold it while you speak."],
   ["cancel", "Cancel", "Only while recording: throws the recording away."],
   ["cleanSelection", "Clean up selection", "Cleans the selected text. Press again right away to undo."],
+  ["switchModel", "Switch speech model", "Moves to the next model ticked under Dictation. While recording, starts again in that model."],
 ];
 
 function pageHotkeys() {
@@ -919,9 +929,14 @@ async function act(name, el) {
   const id = el?.dataset.id;
   try {
     switch (name) {
-      case "select-model":
-        if (S.settings.model !== id) await save({ model: id });
+      case "use-model":
+        await invoke("use_model", { id });
         break;
+      case "tick": {
+        const m = S.models.find((x) => x.id === id);
+        await invoke("set_quick_switch", { id, on: !m?.ticked });
+        break;
+      }
       case "download":
         await invoke("download_model", { id });
         break;
@@ -1135,8 +1150,6 @@ main.addEventListener("click", (e) => {
   if (goEl) return go(goEl.dataset.go);
   const a = e.target.closest("[data-act]");
   if (!a) return;
-  // Buttons inside a clickable card shouldn't also trigger the card.
-  if (a.dataset.act === "select-model" && e.target.closest("button")) return;
   act(a.dataset.act, a);
 });
 

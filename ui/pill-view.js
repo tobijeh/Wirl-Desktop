@@ -10,6 +10,12 @@ const CLIP =
 
 export const WAVE_BARS = 9;
 
+/** The model's short label in the badge's place (quick switch). */
+function tagBadge(tag) {
+  const t = String(tag ?? "");
+  return `<div class="badge"><span class="tag${t.length > 2 ? " long" : ""}">${esc(t)}</span></div>`;
+}
+
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
@@ -29,9 +35,15 @@ export function renderPill(el, state, opts = {}) {
   switch (state.kind) {
     case "recording": {
       const bars = Array.from({ length: WAVE_BARS }, () => "<span></span>").join("");
-      html = `${iconImg()}<div class="wave">${bars}</div><div class="text"><span class="sub">${esc(state.cancelHint)}</span></div>`;
+      // Right after a quick switch the model's tag (EN, 粵, ...) stands in for
+      // the icon for a moment, and the hint names the model.
+      const badge = state.tag ? tagBadge(state.tag) : iconImg();
+      html = `${badge}<div class="wave">${bars}</div><div class="text"><span class="sub">${esc(state.cancelHint)}</span></div>`;
       break;
     }
+    case "modelSwitched":
+      html = `${tagBadge(state.tag)}<div class="text">${esc(state.name)}${state.note ? `<span class="sub">${esc(state.note)}</span>` : ""}</div>`;
+      break;
     case "processing":
       html = `<div class="symbol"><div class="spinner"></div></div><div class="text">Cleaning up</div>`;
       break;

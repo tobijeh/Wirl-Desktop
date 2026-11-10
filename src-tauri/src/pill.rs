@@ -129,6 +129,21 @@ fn position_and_show(w: &WebviewWindow, position: PillPosition, size: wirl_core:
     platform::show_pill_window(w, x as i32, y as i32, pw.round() as u32, ph.round() as u32);
 }
 
+/// Quick switch while recording: shows the model's tag (EN, EN+, 粵, 普) in
+/// place of the icon, and its name, for a moment; then the usual recording
+/// pill again, unless something else changed the pill meanwhile.
+pub fn flash_switched_recording(tag: &str, name: &str, cancel_hotkey: &str) {
+    set(PillState::recording_switched(tag, name));
+    let gen = GENERATION.load(Ordering::SeqCst);
+    let back = PillState::recording(cancel_hotkey);
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(wirl_core::pill::TAG_FLASH_MS)).await;
+        if GENERATION.load(Ordering::SeqCst) == gen {
+            set(back);
+        }
+    });
+}
+
 /// Live input level for the wave while recording.
 pub fn level(rms: f32) {
     if let Some(w) = window() {

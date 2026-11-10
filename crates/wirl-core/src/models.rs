@@ -68,6 +68,9 @@ pub struct ModelInfo {
     pub sha256: &'static str,
     pub language: SpeechLanguage,
     pub engine: Engine,
+    /// Short label the pill shows for a moment when quick switch picks this
+    /// model (same as Android: EN, EN+, 粵, 普).
+    pub tag: &'static str,
 }
 
 pub const BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
@@ -93,6 +96,7 @@ pub const MODELS: &[ModelInfo] = &[
         sha256: "4baf70dd0d7c4247ba2b81fafd9c01005ac77c2f9ef064e00dcf195d0e2fdd2f",
         language: SpeechLanguage::English,
         engine: Engine::Whisper,
+        tag: "EN",
     },
     ModelInfo {
         id: ModelId::Accurate,
@@ -104,6 +108,7 @@ pub const MODELS: &[ModelInfo] = &[
         sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
         language: SpeechLanguage::English,
         engine: Engine::Whisper,
+        tag: "EN+",
     },
     ModelInfo {
         id: ModelId::Cantonese,
@@ -115,6 +120,7 @@ pub const MODELS: &[ModelInfo] = &[
         sha256: SENSEVOICE_SHA256,
         language: SpeechLanguage::Cantonese,
         engine: Engine::SenseVoice,
+        tag: "粵",
     },
     ModelInfo {
         id: ModelId::Mandarin,
@@ -126,6 +132,7 @@ pub const MODELS: &[ModelInfo] = &[
         sha256: SENSEVOICE_SHA256,
         language: SpeechLanguage::Mandarin,
         engine: Engine::SenseVoice,
+        tag: "普",
     },
 ];
 
@@ -144,6 +151,82 @@ pub fn sharing_files(id: ModelId) -> Vec<ModelId> {
         .filter(|m| m.file == file && m.id != id)
         .map(|m| m.id)
         .collect()
+}
+
+/// Quick switch: the models ticked in Settings › Dictation, which the Switch
+/// speech model hotkey moves between. Same rules as Android's `ModelCycle`.
+///
+/// - `ticked` is what's ticked. `current` is the model in use, always
+///   counted as ticked.
+/// - Only downloaded models join the cycle (plus the current one, even
+///   while it's downloading), in list order.
+pub mod cycle {
+    use super::MODELS;
+    use crate::settings::ModelId;
+
+    /// The models the hotkey moves between, in list order.
+    pub fn members(ticked: &[ModelId], current: ModelId, ready: impl Fn(ModelId) -> bool) -> Vec<ModelId> {
+        MODELS
+            .iter()
+            .map(|m| m.id)
+            .filter(|&id| id == current || (ticked.contains(&id) && ready(id)))
+            .collect()
+    }
+
+    /// Whether the hotkey has anywhere to go.
+    pub fn can_switch(ticked: &[ModelId], current: ModelId, ready: impl Fn(ModelId) -> bool) -> bool {
+        members(ticked, current, ready).len() > 1
+    }
+
+    /// The model `step` places along the cycle from `current` (1 is the next
+    /// one, -1 the previous one), wrapping round.
+    pub fn step(ticked: &[ModelId], current: ModelId, ready: impl Fn(ModelId) -> bool, step: i32) -> ModelId {
+        let list = members(ticked, current, ready);
+        let i = list.iter().position(|&m| m == current).unwrap_or(0) as i32;
+        let n = list.len() as i32;
+        list[(i + step).rem_euclid(n) as usize]
+    }
+
+    /// What ticking a model on or off leads to: (ticked, current).
+    pub type Choice = (Vec<ModelId>, ModelId);
+
+    /// Ticks `model` on or off. Ticking on never changes the current model.
+    /// Ticking off the current model moves to the next ticked model
+    /// (downloaded ones first). Returns None when `model` is the only one
+    /// ticked, because one must always stay ticked.
+    pub fn toggle(
+        ticked: &[ModelId],
+        current: ModelId,
+        ready: impl Fn(ModelId) -> bool,
+        model: ModelId,
+        on: bool,
+    ) -> Option<Choice> {
+        let in_order = |set: &dyn Fn(ModelId) -> bool| -> Vec<ModelId> {
+            MODELS.iter().map(|m| m.id).filter(|&id| set(id)).collect()
+        };
+        let all = |id: ModelId| id == current || ticked.contains(&id);
+        if on {
+            return Some((in_order(&|id| all(id) || id == model), current));
+        }
+        let rest = in_order(&|id| all(id) && id != model);
+        if rest.is_empty() {
+            return None;
+        }
+        if model != current {
+            return Some((rest, current));
+        }
+        let next = rest.iter().copied().find(|&id| ready(id)).unwrap_or(rest[0]);
+        Some((rest, next))
+    }
+
+    /// The ticked list as shown: always includes the current model.
+    pub fn ticked_with_current(ticked: &[ModelId], current: ModelId) -> Vec<ModelId> {
+        MODELS
+            .iter()
+            .map(|m| m.id)
+            .filter(|&id| id == current || ticked.contains(&id))
+            .collect()
+    }
 }
 
 pub fn url(m: &ModelInfo) -> String {
@@ -424,6 +507,72 @@ mod tests {
         for (id, code, mode) in cases {
             assert_eq!(language_code(id), code);
             assert_eq!(info(id).language.prompt_mode(), mode);
+        }
+    }
+
+    #[test]
+    fn tags_match_android() {
+        let tags: Vec<&str> = MODELS.iter().map(|m| m.tag).collect();
+        assert_eq!(tags, ["EN", "EN+", "粵", "普"]);
+    }
+
+    mod quick_switch {
+        use super::super::cycle::*;
+        use crate::settings::ModelId::{self, *};
+
+        fn all_ready(_: ModelId) -> bool {
+            true
+        }
+
+        #[test]
+        fn cycles_through_ticked_downloaded_models_in_list_order() {
+            let ticked = [Mandarin, Fast, Cantonese];
+            assert_eq!(members(&ticked, Fast, all_ready), [Fast, Cantonese, Mandarin]);
+            assert_eq!(step(&ticked, Fast, all_ready, 1), Cantonese);
+            assert_eq!(step(&ticked, Cantonese, all_ready, 1), Mandarin);
+            assert_eq!(step(&ticked, Mandarin, all_ready, 1), Fast, "wraps round");
+            assert_eq!(step(&ticked, Fast, all_ready, -1), Mandarin);
+        }
+
+        #[test]
+        fn models_not_downloaded_are_skipped_but_the_current_one_stays() {
+            let ready = |m: ModelId| m != Accurate && m != Mandarin;
+            let ticked = [Accurate, Cantonese, Mandarin];
+            assert_eq!(members(&ticked, Mandarin, ready), [Cantonese, Mandarin]);
+            assert_eq!(step(&ticked, Mandarin, ready, 1), Cantonese);
+        }
+
+        #[test]
+        fn nothing_to_switch_with_one_model() {
+            assert!(!can_switch(&[], Fast, all_ready));
+            assert!(!can_switch(&[Fast], Fast, all_ready));
+            assert_eq!(step(&[], Fast, all_ready, 1), Fast);
+            assert!(
+                !can_switch(&[Cantonese], Fast, |m| m == Fast),
+                "Cantonese not downloaded"
+            );
+            assert!(can_switch(&[Cantonese], Fast, all_ready));
+        }
+
+        #[test]
+        fn ticking_and_unticking() {
+            assert_eq!(
+                toggle(&[], Fast, all_ready, Mandarin, true),
+                Some((vec![Fast, Mandarin], Fast))
+            );
+            assert_eq!(
+                toggle(&[Fast, Mandarin], Fast, all_ready, Mandarin, false),
+                Some((vec![Fast], Fast))
+            );
+            // Unticking the model in use moves to the next ticked, downloaded one.
+            let ready = |m: ModelId| m != Accurate;
+            assert_eq!(
+                toggle(&[Accurate, Cantonese], Fast, ready, Fast, false),
+                Some((vec![Accurate, Cantonese], Cantonese))
+            );
+            // One must stay ticked.
+            assert_eq!(toggle(&[], Fast, all_ready, Fast, false), None);
+            assert_eq!(ticked_with_current(&[Mandarin], Fast), [Fast, Mandarin]);
         }
     }
 

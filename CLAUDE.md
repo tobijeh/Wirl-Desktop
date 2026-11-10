@@ -45,7 +45,7 @@ src-tauri/src
   dictation.rs        dictation + clean-selection flows, watchdog task
   sidecar.rs          spawn/restart/GPU→CPU fallback, Whisper↔SenseVoice switch, request routing, timeouts
   audio.rs            cpal capture thread, chime
-  hotkeys.rs          global shortcuts (Cancel only while recording), conflicts
+  hotkeys.rs          global shortcuts (Cancel only while recording; Switch speech model), conflicts
   pill.rs, tray.rs    indicator window and tray icon/menu
   cloud_sync.rs       sync loop (launch, after changes, every 5 min), pairing code, disconnect all phones
   updater.rs          check on launch + daily, download, install on restart/quit
@@ -82,7 +82,8 @@ Copy selection → `UndoTracker::on_hotkey`. Same text as the last cleanup → p
 
 - The Dictation page has one **Speech model** list, one row per model, each naming its language (same names and wording as Android): **English · Fast** (Whisper base.en), **English · Accurate** (Whisper small.en), **Cantonese (粵語)**, **Mandarin (普通话)**. There is **no separate language setting**: the model decides what the engine is told (`en`, `yue`, `zh`: `SpeechLanguage::code`) and the cleanup mode (`SpeechLanguage::prompt_mode`), so they can't disagree. The model name (`ModelInfo::name`) is used everywhere it's shown.
 - **Multilingual was removed.** `Settings::from_json` migrates old settings (`SETTINGS_VERSION` 2): `multilingual` (or any unknown model) becomes `fast`, the old `language` key is dropped, and the app deletes `ggml-base.bin` at start-up (`App::remove_retired_models`).
-- Rows show size, progress, Cancel (keeps the `.part` file; the row offers Resume), Download or Delete (asks first, in the row). The chosen model, when not downloaded, gets an amber note. Downloads are tracked **per file**.
+- Rows show size, progress, Cancel (keeps the `.part` file; the row offers Resume), Download or Delete (asks first, in the row). The model in use, when not downloaded, gets an amber note. Downloads are tracked **per file**. Clicking a row never starts a download; only the Download button does. "Use now" makes a downloaded model the one in use (`use_model`).
+- **Quick switch** (same rules as Android #62, `models::cycle`, port of `ModelCycle`): each row has a tick box (`Settings.quick_switch`, always counting the model in use). Only a downloaded model can be ticked; one always stays ticked; unticking the one in use moves to the next ticked model (downloaded first). A finished download ticks its model and becomes the one in use if that one isn't downloaded; Delete unticks. The **Switch speech model** hotkey (default Ctrl+Alt+M, registered with Dictate and Clean up) moves to the next ticked, downloaded model in list order, wrapping round (Android's swipe up/down; the desktop goes forward only). Idle: the pill shows the model's tag (`ModelInfo::tag`: EN, EN+, 粵, 普) and name for 1.4 s (`ModelSwitched`), or "Tick more models to switch" when there's nothing to switch to. Recording: what was said is dropped as with Cancel, recording starts again in the new model (the Dictate key's hold state is kept), and the recording pill shows the tag in place of the icon and the model name in place of the cancel hint for 1.2 s (`Recording.tag`, `TAG_FLASH_MS`), then the usual icon. Ignored while processing or cleaning up a selection.
 - **Cantonese and Mandarin** run SenseVoice (`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`, int8, official k2-fsa `asr-models` release) through sherpa-onnx in `wirl-sensevoice`, with the **same files** (one download; rows say "one download for Cantonese and Mandarin"; deleting either removes both, with a warning). Details: `docs/cantonese.md`, `docs/mandarin.md`.
 - The SenseVoice archive (165,783,878 bytes, SHA-256 checked) is downloaded in the app, never bundled; only `model.int8.onnx` (237,115,547 bytes) and `tokens.txt` (315,894 bytes) are unpacked, sizes checked, then the archive is deleted.
 - sherpa-onnx is the official `sherpa-onnx` crate, pinned exactly (`=2.0.1`, same as Android), linked statically. Its Windows libraries are built with /MT, so the sidecar is built with `-C target-feature=+crt-static` (`build-sidecars.ps1`, its own target folder). It's excluded from the lint job's clippy/tests and checked in the build job instead (clippy, start-up smoke test, real recognition on a test clip).
@@ -100,7 +101,7 @@ Copy selection → `UndoTracker::on_hotkey`. Same text as the last cleanup → p
 
 ## Pill states
 
-Hidden when idle. Recording (plain icon, live wave, "<Cancel> to cancel"; no ring: the pill appearing and the wave already show it's listening), Processing ("Cleaning up"), Inserted (1 s), Inserted + one-time clean-up tip (6 s), Cleaned + "<Clean hotkey> to undo" (3 s), Undone, Copied (amber), Error (amber, short message). The "status messages" toggle hides only the success confirmations.
+Hidden when idle. Recording (plain icon, live wave, "<Cancel> to cancel"; no ring: the pill appearing and the wave already show it's listening; right after a quick switch the model tag and name for 1.2 s), Model switched (tag + name, 1.4 s; always shown), Processing ("Cleaning up"), Inserted (1 s), Inserted + one-time clean-up tip (6 s), Cleaned + "<Clean hotkey> to undo" (3 s), Undone, Copied (amber), Error (amber, short message). The "status messages" toggle hides only the success confirmations.
 
 ## Tray states
 

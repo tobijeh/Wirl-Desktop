@@ -460,6 +460,68 @@ fn report_insert(diag: &mut DiagEntry, outcome: &InsertOutcome) {
     });
 }
 
+// ---------- quick switch ----------
+
+/// Switch speech model hotkey: moves to the next model ticked in Settings ›
+/// Dictation (same rules as Android's swipe on the bubble) and shows its tag
+/// on the pill. While recording, what was said so far is dropped, as with
+/// Cancel, and recording starts again in the new model.
+pub fn on_switch_model() {
+    tauri::async_runtime::spawn(async {
+        if let Err(e) = switch_model().await {
+            log::warn!("switch model: {e}");
+        }
+    });
+}
+
+async fn switch_model() -> Result<(), String> {
+    let a = app::get().clone();
+    let s = a.settings();
+    if !s.enabled {
+        return Err("off".into());
+    }
+    let phase = a.phase();
+    if matches!(phase, Phase::Processing | Phase::CleaningSelection) {
+        // Finishing the last dictation or clean-up; switching now would be confusing.
+        return Err("busy".into());
+    }
+    let ready = |m| a.model_ready(m);
+    if !models::cycle::can_switch(&s.quick_switch, s.model, ready) {
+        let m = models::info(s.model);
+        if phase == Phase::Idle {
+            pill::set(PillState::model_switched(m.tag, m.name, true));
+        }
+        return Ok(());
+    }
+    let next = models::cycle::step(&s.quick_switch, s.model, ready, 1);
+    let info = models::info(next);
+    a.settings.write().model = next;
+    a.save_settings();
+    a.log_diag(DiagEntry::new(DiagKind::Info, format!("Switched to {}", info.name)));
+    crate::commands::ensure_model(next);
+    a.notify();
+    tray::refresh();
+    if phase != Phase::Recording {
+        pill::set(PillState::model_switched(info.tag, info.name, false));
+        return Ok(());
+    }
+    // Recording: drop what was said, then record again in the new model.
+    // Keep the Dictate key's state, so a held key still stops on release.
+    let trigger = a.trigger.lock().clone();
+    cancel();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while a.phase() != Phase::Idle {
+        if Instant::now() > deadline {
+            return Err("the old recording didn't stop".into());
+        }
+        tokio::time::sleep(Duration::from_millis(15)).await;
+    }
+    start().await?;
+    *a.trigger.lock() = trigger;
+    pill::flash_switched_recording(info.tag, info.name, &s.hotkeys.cancel.to_string());
+    Ok(())
+}
+
 // ---------- clean up selection ----------
 
 pub fn on_clean_selection() {

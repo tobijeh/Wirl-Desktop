@@ -26,6 +26,7 @@ pub struct Hotkeys {
     pub dictate: Hotkey,
     pub cancel: Hotkey,
     pub clean_selection: Hotkey,
+    pub switch_model: Hotkey,
 }
 
 impl Default for Hotkeys {
@@ -34,6 +35,7 @@ impl Default for Hotkeys {
             dictate: default_for(Action::Dictate),
             cancel: default_for(Action::Cancel),
             clean_selection: default_for(Action::CleanSelection),
+            switch_model: default_for(Action::SwitchModel),
         }
     }
 }
@@ -44,6 +46,7 @@ impl Hotkeys {
             Action::Dictate => &self.dictate,
             Action::Cancel => &self.cancel,
             Action::CleanSelection => &self.clean_selection,
+            Action::SwitchModel => &self.switch_model,
         }
     }
     pub fn set(&mut self, a: Action, h: Hotkey) {
@@ -51,6 +54,7 @@ impl Hotkeys {
             Action::Dictate => self.dictate = h,
             Action::Cancel => self.cancel = h,
             Action::CleanSelection => self.clean_selection = h,
+            Action::SwitchModel => self.switch_model = h,
         }
     }
     pub fn all(&self) -> Vec<(Action, Hotkey)> {
@@ -58,6 +62,7 @@ impl Hotkeys {
             (Action::Dictate, self.dictate.clone()),
             (Action::Cancel, self.cancel.clone()),
             (Action::CleanSelection, self.clean_selection.clone()),
+            (Action::SwitchModel, self.switch_model.clone()),
         ]
     }
 }
@@ -74,6 +79,10 @@ pub struct Settings {
 
     // Dictation. The model decides the language (models::SpeechLanguage).
     pub model: ModelId,
+    /// Models ticked for quick switch (Settings › Dictation); the Switch
+    /// speech model hotkey moves between them. The model in use always
+    /// counts as ticked (see `models::cycle`).
+    pub quick_switch: Vec<ModelId>,
     pub pause_media: bool,
 
     // AI cleanup
@@ -108,6 +117,7 @@ impl Default for Settings {
             first_run_done: false,
             version: SETTINGS_VERSION,
             model: ModelId::Fast,
+            quick_switch: Vec::new(),
             pause_media: true,
             cleanup_enabled: true,
             style_notes: String::new(),
@@ -176,6 +186,10 @@ fn migrate(v: &mut serde_json::Value) {
     if !known {
         obj.insert("model".into(), "fast".into());
     }
+    // Quick switch: drop models this version doesn't know.
+    if let Some(list) = obj.get_mut("quickSwitch").and_then(|l| l.as_array_mut()) {
+        list.retain(|m| serde_json::from_value::<ModelId>(m.clone()).is_ok());
+    }
     obj.insert("version".into(), SETTINGS_VERSION.into());
 }
 
@@ -191,6 +205,8 @@ mod tests {
         assert_eq!(s.hotkeys.dictate.to_string(), "Ctrl+Alt+Space");
         assert_eq!(s.hotkeys.cancel.to_string(), "Esc");
         assert_eq!(s.hotkeys.clean_selection.to_string(), "Ctrl+Alt+C");
+        assert_eq!(s.hotkeys.switch_model.to_string(), "Ctrl+Alt+M");
+        assert!(s.quick_switch.is_empty());
         assert_eq!(s.pill_position, PillPosition::BottomCenter);
     }
 
@@ -201,6 +217,18 @@ mod tests {
         assert_eq!(s.pill_position, PillPosition::NearMouse);
         assert!(s.hold_to_talk);
         assert_eq!(Settings::from_json("garbage"), Settings::default());
+    }
+
+    #[test]
+    fn older_settings_get_the_switch_hotkey() {
+        let s = Settings::from_json(
+            r#"{"version":2,"hotkeys":{"dictate":{"ctrl":true,"alt":false,"shift":true,"win":false,"key":"D"}}}"#,
+        );
+        assert_eq!(s.hotkeys.dictate.to_string(), "Ctrl+Shift+D");
+        assert_eq!(s.hotkeys.switch_model.to_string(), "Ctrl+Alt+M");
+        let back = Settings::from_json(r#"{"version":2,"quickSwitch":["fast","mandarin","nope"]}"#);
+        // An unknown entry is dropped rather than resetting everything.
+        assert_eq!(back.quick_switch, [ModelId::Fast, ModelId::Mandarin]);
     }
 
     #[test]

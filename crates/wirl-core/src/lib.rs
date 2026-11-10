@@ -17,6 +17,7 @@ pub mod pill;
 #[cfg(feature = "net")]
 pub mod pipeline;
 pub mod prompt;
+pub mod relay;
 pub mod settings;
 pub mod sync;
 pub mod watchdog;

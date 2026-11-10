@@ -48,9 +48,11 @@ Status per platform.
 | **Dictionary** | Add, edit, delete (tombstones), search, alphabetical | ✅ | 🔵 |
 | | Phonetic + case-insensitive matching | ✅ | ❔ |
 | | Import (sync format or simple list) with merge; export | ✅ | ❔ |
-| **Phone sync** | QR pairing, mDNS `_wirl._tcp`, AES-256-GCM, merge rule | ✅ (protocol in docs/sync-protocol.md) | 🔵 |
-| | Paired phones with "Synced X min ago", Unpair | 🟢 | 🔵 |
-| | Private networks only | ✅ | 🔵 |
+| **Phone sync** | Encrypted mailbox relay on Cloudflare, no accounts; works on any network (protocol v2 in docs/sync-protocol.md) | ✅ logic + relay tested / 🟢 needs a live check | ⬜ (Android update pending) |
+| | QR pairing; several phones share one dictionary | ✅ | ⬜ |
+| | Phones listed with "Synced X min ago"; Sync now | 🟢 | ⬜ |
+| | Disconnect all phones (closes the mailbox, new code) | ✅ | ⬜ |
+| | Syncs on launch, after changes, on opening the Dictionary, every 5 minutes | 🟢 | ⬜ |
 | **Onboarding** | Welcome tour on first launch: try talking and tidying up in practice boxes, with the real hotkeys | ✅ logic / 🟢 Windows | ❔ |
 | | Replay the tour from Setup or Home | ✅ | ❔ |
 | | "Your two shortcuts" card on Home until each has been used 3 times | ✅ | ❔ |

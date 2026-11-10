@@ -1,7 +1,7 @@
 //! Commands called by the settings window. Everything autosaves.
 
 use crate::app::{self, DownloadState, Phase};
-use crate::{dictation, hotkeys, storage, sync_server, tray, updater};
+use crate::{cloud_sync, dictation, hotkeys, storage, tray, updater};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,7 +45,13 @@ pub fn get_state() -> Value {
     let entries: Vec<_> = dict.visible().into_iter().cloned().collect();
     let count = dict.count();
     drop(dict);
-    let phones = a.device.lock().phones.clone();
+    let sync_status = cloud_sync::status();
+    let phones: Vec<_> = sync_status
+        .devices
+        .iter()
+        .filter(|d| d.kind == wirl_core::sync::DeviceKind::Phone)
+        .cloned()
+        .collect();
     let conflicts: serde_json::Map<String, Value> = a
         .hotkey_conflicts
         .lock()
@@ -87,9 +93,8 @@ pub fn get_state() -> Value {
         "update": a.update.lock().clone(),
         "diagnostics": diagnostics,
         "lastError": a.last_error.lock().clone(),
-        "computerName": sync_server::computer_name(),
-        "pairingPending": a.pairing.lock().as_ref().is_some_and(|p| wirl_core::dictionary::now_ms() - p.created_ms < app::PAIRING_TTL_MS),
-        "syncRejectedMs": *a.sync_rejected_ms.lock(),
+        "computerName": cloud_sync::computer_name(),
+        "sync": sync_status,
     })
 }
 
@@ -269,6 +274,7 @@ pub fn dict_add(term: String, sounds_like: String, note: String) -> CmdResult<()
     a.dict.lock().add(&term, split_sounds_like(&sounds_like), &note)?;
     a.save_dictionary();
     a.notify();
+    cloud_sync::request();
     Ok(())
 }
 
@@ -278,6 +284,7 @@ pub fn dict_edit(id: String, term: String, sounds_like: String, note: String) ->
     a.dict.lock().edit(&id, &term, split_sounds_like(&sounds_like), &note)?;
     a.save_dictionary();
     a.notify();
+    cloud_sync::request();
     Ok(())
 }
 
@@ -287,6 +294,7 @@ pub fn dict_delete(id: String) -> CmdResult<()> {
     a.dict.lock().delete(&id);
     a.save_dictionary();
     a.notify();
+    cloud_sync::request();
     Ok(())
 }
 
@@ -306,6 +314,7 @@ pub async fn dict_import(app: AppHandle) -> CmdResult<Option<String>> {
     let s = a.dict.lock().import_json(&text)?;
     a.save_dictionary();
     a.notify();
+    cloud_sync::request();
     Ok(Some(format!("Added {}, updated {}", s.added, s.updated)))
 }
 
@@ -332,31 +341,25 @@ pub async fn dict_export(app: AppHandle) -> CmdResult<Option<String>> {
 #[serde(rename_all = "camelCase")]
 pub struct PairingInfo {
     svg: String,
-    expires_ms: i64,
 }
 
+/// The QR code phones scan. Creates the sync group the first time.
 #[tauri::command]
 pub fn pair_begin() -> CmdResult<PairingInfo> {
-    let (_json, svg) = sync_server::begin_pairing()?;
-    Ok(PairingInfo {
-        svg,
-        expires_ms: wirl_core::dictionary::now_ms() + app::PAIRING_TTL_MS,
-    })
+    let (_json, svg) = cloud_sync::pairing_code()?;
+    Ok(PairingInfo { svg })
 }
 
-/// Withdraws the pairing code shown on screen (an explicit "Cancel pairing").
-/// Closing the QR panel doesn't call this: the code stays valid until a phone
-/// uses it or it expires, because the phone's first sync comes a little later.
+/// Sync now (the Dictionary page opened, or "Sync now").
 #[tauri::command]
-pub fn pair_cancel() {
-    let a = app::get();
-    *a.pairing.lock() = None;
-    a.notify();
+pub fn sync_now() {
+    cloud_sync::request();
 }
 
+/// Disconnects every phone and makes a new code.
 #[tauri::command]
-pub fn unpair(phone_id: String) {
-    sync_server::unpair(&phone_id);
+pub async fn disconnect_all_phones() -> CmdResult<()> {
+    cloud_sync::disconnect_all().await
 }
 
 // ---------- hotkeys ----------

@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod audio;
+pub mod cloud_sync;
 pub mod commands;
 pub mod dictation;
 pub mod hotkeys;
@@ -9,7 +10,6 @@ pub mod pill;
 pub mod platform;
 pub mod sidecar;
 pub mod storage;
-pub mod sync_server;
 pub mod tray;
 pub mod updater;
 pub mod windows;
@@ -78,8 +78,8 @@ pub fn run() {
             commands::dict_import,
             commands::dict_export,
             commands::pair_begin,
-            commands::pair_cancel,
-            commands::unpair,
+            commands::sync_now,
+            commands::disconnect_all_phones,
             commands::hotkey_capture,
             commands::hotkey_key,
             commands::hotkey_check,
@@ -107,7 +107,7 @@ pub fn run() {
             pill::create(&handle)?;
             tray::create(&handle)?;
             hotkeys::register_all();
-            sync_server::start();
+            cloud_sync::start();
             dictation::start_watchdog();
             updater::start_schedule();
             let s = a.settings();

@@ -46,6 +46,7 @@ jobs:
         run: |
           node scripts/check-ui.mjs
           node scripts/test-ui.mjs
+          node --test relay/test/mailbox.test.mjs
 
       # tauri-build checks that bundled sidecars exist; lint doesn't need real ones.
       - name: Placeholder sidecars for type-checking

@@ -6,7 +6,7 @@ Wirl lives in your system tray. Press a hotkey in any text box, talk, and Wirl t
 2. **Claude** tidies it up: removes "um", follows "scratch that", fixes misheard words, and spells your names right.
 3. Wirl **pastes** the result where your cursor is, then puts your clipboard back.
 
-It's the desktop version of Wirl for Android. Both apps share a personal dictionary over Wi-Fi.
+It's the desktop version of Wirl for Android. Both apps share a personal dictionary, end-to-end encrypted, with no account needed.
 
 > **Your own API key.** Each person enters their own Anthropic API key in *Setup*. It is stored in Windows Credential Manager. No key is ever stored in this repository or used by GitHub Actions.
 
@@ -19,7 +19,7 @@ It's the desktop version of Wirl for Android. Both apps share a personal diction
    - If something's missing, it asks for it: your **API key** from the [Anthropic Console](https://console.anthropic.com/settings/keys), and **microphone** access. The speech model (60 MB) downloads in the background.
    - You **try talking** in a practice box, then **tidy up** a messy paragraph, using the real shortcuts.
    - You can skip it, and take it again any time from *Setup › Take the tour*.
-4. **Phone sync** (optional): *Dictionary › Pair with phone*. When Windows Firewall asks, allow Wirl on **Private networks** only.
+4. **Phone sync** (optional): *Dictionary › Pair a phone*, then scan the code with Wirl on your phone (*Computer sync › Pair with a computer*). The phone can be on any network.
 
 Then press **Ctrl+Alt+Space** in any app. Hold it while you talk and let go to insert, or tap it once to start and again to stop. **Esc** cancels.
 Select text and press **Ctrl+Alt+C** to clean it up; press it again straight away to undo.
@@ -39,6 +39,15 @@ Wirl updates itself from this repository's GitHub Releases. Every release is sig
 Installed copies check for updates on launch and once a day, download in the background, and show **Update ready** (green dot) in the tray. The update installs when you choose **Restart to update** or when you quit Wirl.
 
 **If the private key is ever lost or leaked:** make a new pair (`npx.cmd @tauri-apps/cli@2 signer generate -w "$HOME\.tauri\wirl.key"`, press Enter twice for no password), replace the secret, and put the new public key in `tauri.conf.json`. Copies installed before that can't verify the new signature, so they need one manual reinstall from the next release.
+
+## Phone sync server (one-time setup for the repo owner)
+
+Phones and computers sync through a tiny mailbox on Cloudflare Workers (`relay/`, free plan). It stores only encrypted data. GitHub deploys it automatically when `relay/` changes on `main` (or *Actions › Relay › Run workflow*). It needs two repository secrets:
+
+- `CLOUDFLARE_API_TOKEN`: in the Cloudflare dashboard, *My Profile › API Tokens › Create Token*, template **Edit Cloudflare Workers**.
+- `CLOUDFLARE_ACCOUNT_ID`: the long code in the dashboard's address bar after `dash.cloudflare.com/`.
+
+The account's workers.dev subdomain is `wirl`, so the relay lives at `https://wirl-relay.wirl.workers.dev` (the default in `wirl_core::sync::DEFAULT_RELAY`; a build can override it with the `WIRL_RELAY_URL` environment variable). Phones read the address from the QR code.
 
 ## Develop
 
@@ -67,11 +76,12 @@ It runs 26 cases from `tests/quality/cases.json` (self-corrections, restarts, sp
 
 | Path | What |
 |---|---|
-| `crates/wirl-core` | All platform-independent logic, unit tested: cleanup prompt and request, Claude client, dictionary and matching, sync crypto and merge, VAD chunking and `audio_ctx`, hotkeys, pill states, clipboard insert/undo logic, settings |
+| `crates/wirl-core` | All platform-independent logic, unit tested: cleanup prompt and request, Claude client, dictionary and matching, sync keys, encryption, merge and the relay client, VAD chunking and `audio_ctx`, hotkeys, pill states, clipboard insert/undo logic, settings |
 | `crates/wirl-whisper` | The Whisper sidecar process |
 | `crates/wirl-icons` | Icon import and `.ico` generation |
-| `src-tauri` | The Tauri app: tray, hotkeys, audio, pill window, Windows integration, sync server, updater |
+| `src-tauri` | The Tauri app: tray, hotkeys, audio, pill window, Windows integration, phone sync, updater |
 | `ui` | Settings window and pill (plain HTML/CSS/JS, Manrope font bundled) |
+| `relay/` | The phone sync mailbox: a Cloudflare Worker that stores only encrypted data |
 | `docs/sync-protocol.md` | Phone sync protocol (shared with Android) |
 
 See [CLAUDE.md](CLAUDE.md) for the design and rules, and [FEATURES.md](FEATURES.md) for feature status on Android and Desktop.
@@ -80,4 +90,4 @@ See [CLAUDE.md](CLAUDE.md) for the design and rules, and [FEATURES.md](FEATURES.
 
 - Audio never leaves your computer.
 - Text is sent to Anthropic only for cleanup, with your own key. Turn AI cleanup off to keep everything local.
-- Dictionary sync is end-to-end encrypted (AES-256-GCM) and stays on your local network.
+- Dictionary sync is end-to-end encrypted (AES-256-GCM) with a key that only your devices have. The sync mailbox stores only scrambled data and can't read your dictionary.

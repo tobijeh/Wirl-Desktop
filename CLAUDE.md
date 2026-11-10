@@ -4,14 +4,14 @@ Guidance for anyone (human or AI) changing this repo. Read this first.
 
 ## What Wirl is
 
-A system-tray dictation app: hotkey → record → Whisper (local) → Claude cleanup → paste at the cursor → restore clipboard. Desktop twin of the Wirl Android app; the two share a dictionary over Wi-Fi.
+A system-tray dictation app: hotkey → record → Whisper (local) → Claude cleanup → paste at the cursor → restore clipboard. Desktop twin of the Wirl Android app; the two share a dictionary through an end-to-end encrypted mailbox (no accounts).
 
 ## Hard rules
 
 1. **No API keys in the repo or in GitHub Actions.** Each user enters their own Anthropic key in Setup; it lives in Windows Credential Manager (`keyring`). The quality-test script reads `ANTHROPIC_API_KEY` from the environment at run time and never saves it. Never add a workflow step that calls the Claude API.
 2. **The core cleanup prompt is fixed.** `wirl_core::prompt::CORE_PROMPT` must match the product spec character for character and is not user-editable. Only style notes and matching dictionary entries are appended (in that order, under the exact headers in `prompt.rs`).
 3. **Cleanup request:** model `claude-haiku-5-5`, `thinking: {type: "disabled"}`, `output_config.effort: "low"`, no sampling parameters, streamed. One shared function (`ClaudeClient::cleanup`) for dictation, clean-selection and the quality script.
-4. **Icons are used exactly as provided.** The 25 PNGs cut from `wirl-icons-sheet.png` (or a `wirl-icons.zip`) (in `ui/assets/icons/`, order and default from `icons.json`) are never redrawn, restyled or substituted. Only scaling for `.ico`/tray sizes and the tray-state overlays (red ring, dimming, greyscale, amber badge, green dot) are allowed.
+4. **Icons are used exactly as provided.** The 25 PNGs cut from `wirl-icons-sheet.png` (or a `wirl-icons.zip`) (in `ui/assets/icons/`, order and default from `icons.json`) are never redrawn, restyled or substituted. Only scaling for `.ico`/tray sizes and the tray-state overlays (red ring on the tray icon only, dimming, greyscale, amber badge, green dot) are allowed.
 5. **Sync protocol is shared with Android.** Any change must be made in `docs/sync-protocol.md` first and stay wire-compatible. The `known_test_vector` test pins the crypto.
 6. **Whisper runs in a sidecar process** (`crates/wirl-whisper`). Never link whisper.cpp into the app process. If the sidecar dies, the app logs why, fails pending requests, restarts it and reloads the model.
 7. **Nothing heavy on the UI thread.** Capture has its own thread, Whisper its own process, clipboard/SendInput work runs in `spawn_blocking`. Every stage has a timeout (`wirl_core::pipeline`); the watchdog resets anything busy over 30 s.
@@ -25,7 +25,8 @@ crates/wirl-core      pure logic (unit tested, builds anywhere)
   prompt.rs           core prompt, system prompt builder, request body
   claude.rs           keep-alive HTTP client, SSE parsing, warm(), error → plain message
   dictionary.rs       entries, search, phonetic matching, import/export, merge, tombstones
-  sync.rs             pairing QR, HKDF + AES-GCM, request handling, private-peer check
+  sync.rs             pairing QR v2, key derivation (mailbox id, token, key), AES-GCM, payload + device merge
+  relay.rs            mailbox relay client (GET/PUT/DELETE) and the sync round with compare-and-swap retries
   audio.rs            resampler → 16 kHz mono, VAD chunker (5–10 s chunks), audio_ctx
   filter.rs           strip [sound tags] and lone hallucinations
   hotkey.rs           parse/format, conflicts, shortcut recorder, hold-to-talk state machine
@@ -35,6 +36,7 @@ crates/wirl-core      pure logic (unit tested, builds anywhere)
   onboarding.rs       usage counts, one-time clean-up tip, shortcut card rule
   settings.rs, models.rs (catalog + resumable verified download), ipc.rs, icons.rs, diagnostics.rs, watchdog.rs
 crates/wirl-whisper   sidecar: JSON lines over stdin/stdout, whisper-rs
+relay/                Cloudflare Worker: one Durable Object per mailbox (rules in src/mailbox.js, node tests)
 crates/wirl-icons     slice wirl-icons-sheet.png / unzip wirl-icons.zip → ui/assets/icons, generate src-tauri/icons
 src-tauri/src
   lib.rs              plugins, setup, run loop (closing the window keeps Wirl in the tray)
@@ -44,7 +46,7 @@ src-tauri/src
   audio.rs            cpal capture thread, chime
   hotkeys.rs          global shortcuts (Cancel only while recording), conflicts
   pill.rs, tray.rs    indicator window and tray icon/menu
-  sync_server.rs      axum server, mDNS, pairing
+  cloud_sync.rs       sync loop (launch, after changes, every 5 min), pairing code, disconnect all phones
   updater.rs          check on launch + daily, download, install on restart/quit
   commands.rs         settings-window API
   platform/windows.rs clipboard (all formats), SendInput, UIPI check, monitors, media pause, mic privacy
@@ -65,10 +67,13 @@ ui/                   settings.html/js, pill.html/js, pill-view.js (shared rende
 
 Copy selection → `UndoTracker::on_hotkey`. Same text as the last cleanup → paste the original (undo). No selection but armed → re-select the pasted text with Shift+Left, compare, undo if unchanged; otherwise collapse the selection and reset. Different text → clean it.
 
-## Phone pairing (desktop side)
+## Phone sync (desktop side)
 
-- A pairing code stays valid until a phone's first sync uses it or 15 minutes pass. Closing the QR panel only hides it ("Waiting for your phone…"); only "Cancel pairing" withdraws it. The phone's first sync arrives a few seconds after the scan, so never tie the code to the panel being open.
-- A refused sync (401) sets `sync_rejected_ms`, which the Dictionary page shows as an amber "didn't recognize its pairing" note until the next successful sync. Every successful sync calls `notify()` so the page updates.
+- Protocol v2 in `docs/sync-protocol.md`: a mailbox relay on Cloudflare (`relay/`, deployed by `.github/workflows/relay.yml`), no accounts. The relay stores only ciphertext and SHA-256 of the token. Never send anything unencrypted to it, and never add server-side logic that needs to read the dictionary.
+- The group secret lives in Windows Credential Manager (`storage::get_sync_secret`). It's created the first time the pairing code is shown and stays the same until "Disconnect all phones" (DELETE the mailbox → phones get 410, then a new secret).
+- `cloud_sync` runs one round at a time (`RUNNING` lock): on launch, 2 s after a dictionary change (`cloud_sync::request()` from every dictionary command), when the Dictionary page opens, on "Sync now", and every 5 minutes. The result is merged with the current dictionary (never overwrites edits made during the round). New phones in the device list fire `wirl://paired`.
+- Relay URL: `wirl_core::sync::DEFAULT_RELAY` (`https://wirl-relay.wirl.workers.dev`), overridable at build time with `WIRL_RELAY_URL`. Phones take it from the QR code.
+- Manual end-to-end check: run the relay locally (`cd relay && npx wrangler@4 dev --local --port 8799`) and `WIRL_RELAY_URL=http://127.0.0.1:8799 cargo run -p wirl-core --example relay_smoke`.
 
 ## Welcome tour (onboarding)
 
@@ -80,7 +85,7 @@ Copy selection → `UndoTracker::on_hotkey`. Same text as the last cleanup → p
 
 ## Pill states
 
-Hidden when idle. Recording (red ring, wave, "<Cancel> to cancel"), Processing ("Cleaning up"), Inserted (1 s), Inserted + one-time clean-up tip (6 s), Cleaned + "<Clean hotkey> to undo" (3 s), Undone, Copied (amber), Error (amber, short message). The "status messages" toggle hides only the success confirmations.
+Hidden when idle. Recording (plain icon, live wave, "<Cancel> to cancel"; no ring: the pill appearing and the wave already show it's listening), Processing ("Cleaning up"), Inserted (1 s), Inserted + one-time clean-up tip (6 s), Cleaned + "<Clean hotkey> to undo" (3 s), Undone, Copied (amber), Error (amber, short message). The "status messages" toggle hides only the success confirmations.
 
 ## Tray states
 
@@ -94,6 +99,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 node scripts/check-ui.mjs                          # UI syntax
 node scripts/test-ui.mjs                           # UI logic (welcome tour)
+node --test relay/test/mailbox.test.mjs            # sync relay rules
 cargo run -p wirl-icons -- all                     # icons (ui/assets/icons, else wirl-icons-sheet.png or wirl-icons.zip)
 ./scripts/build-sidecars.ps1                       # Windows sidecars
 npm run tauri dev
@@ -106,6 +112,7 @@ Cross-checking Windows code from Linux: `cargo clippy -p wirl --target x86_64-pc
 
 - `.github/workflows/ci.yml` (pull requests): fmt, UI syntax, clippy, unit tests, then a full Windows build (sidecars + NSIS installer) uploaded as an artifact.
 - `.github/workflows/release.yml` (push to `main`): next patch version from the latest `vX.Y.*` tag, signed build, GitHub Release with the installer, its `.sig` and `latest.json`. Needs the `TAURI_SIGNING_PRIVATE_KEY` secret; fails with a clear message without it.
+- `.github/workflows/relay.yml` (push to `main` touching `relay/`): tests and deploys the sync relay to Cloudflare. Needs the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets; skips the deploy with a notice without them.
 - No paid code signing; README documents the "Windows protected your PC" step.
 - **Updater signing key.** The public key lives in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`, with `bundle.createUpdaterArtifacts: true`). The private key lives only in the `TAURI_SIGNING_PRIVATE_KEY` GitHub secret and on Toby's PC. It has no password, so `release.yml` sets `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to `""`. Never commit a private key (`.gitignore` blocks `*.key`), and never change the public key unless the private key is replaced: installed copies only accept updates signed with the matching key. Pull request builds turn updater artifacts off, because they don't get the key.
 - **Whisper bindings** are generated by bindgen on the Windows runner (`LIBCLANG_PATH`, LLVM is preinstalled). Don't set `WHISPER_DONT_GENERATE_BINDINGS`: the bundled bindings are for Linux and fail to compile for MSVC. The sidecars build with `CMAKE_GENERATOR=Ninja` inside the MSVC environment (`ilammy/msvc-dev-cmd`), because under the Visual Studio generator whisper.cpp's `vulkan-shaders-gen` sub-build can't find the compiler. They build in a short folder (`WIRL_SIDECAR_TARGET=C:\s`) because the Vulkan build's nested paths pass the Windows path limit otherwise.

@@ -78,23 +78,12 @@ pub fn save_dictionary(p: &Paths, d: &Dictionary) {
     }
 }
 
-/// A paired phone. The shared secret itself lives in the credential store.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PairedPhone {
-    pub phone_id: String,
-    pub name: String,
-    pub paired_at: i64,
-    pub last_sync: Option<i64>,
-}
-
-/// This computer's identity for sync, plus paired phone metadata.
+/// This computer's identity for sync. Older files may still have a
+/// `phones` list from Wi-Fi sync; it's ignored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceInfo {
     pub device_id: String,
-    #[serde(default)]
-    pub phones: Vec<PairedPhone>,
 }
 
 pub fn load_device(p: &Paths) -> DeviceInfo {
@@ -106,7 +95,6 @@ pub fn load_device(p: &Paths) -> DeviceInfo {
         None => {
             let d = DeviceInfo {
                 device_id: uuid::Uuid::new_v4().to_string(),
-                phones: vec![],
             };
             save_device(p, &d);
             d
@@ -155,27 +143,21 @@ pub fn api_key_hint(key: &str) -> String {
     format!("Saved, ending in {tail}")
 }
 
-fn phone_user(phone_id: &str) -> String {
-    format!("phone-{phone_id}")
+/// Credential Manager entry for the phone sync group secret.
+const SYNC_USER: &str = "sync-group";
+
+pub fn get_sync_secret() -> Option<String> {
+    let _g = SECRET_LOCK.lock();
+    entry(SYNC_USER)
+        .ok()?
+        .get_password()
+        .ok()
+        .filter(|s| !s.trim().is_empty())
 }
 
-pub fn get_phone_secret(phone_id: &str) -> Option<String> {
+pub fn set_sync_secret(secret: &str) -> Result<(), String> {
     let _g = SECRET_LOCK.lock();
-    entry(&phone_user(phone_id)).ok()?.get_password().ok()
-}
-
-pub fn set_phone_secret(phone_id: &str, secret: &str) -> Result<(), String> {
-    let _g = SECRET_LOCK.lock();
-    entry(&phone_user(phone_id))?
-        .set_password(secret)
-        .map_err(|e| e.to_string())
-}
-
-pub fn delete_phone_secret(phone_id: &str) {
-    let _g = SECRET_LOCK.lock();
-    if let Ok(e) = entry(&phone_user(phone_id)) {
-        let _ = e.delete_credential();
-    }
+    entry(SYNC_USER)?.set_password(secret).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

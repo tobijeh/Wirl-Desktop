@@ -174,7 +174,7 @@ async fn start() -> Result<(), String> {
     let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
     *a.control.lock() = Some(ctl_tx);
     hotkeys::set_cancel_active(true);
-    pill::set(PillState::recording(&s.hotkeys.cancel.to_string()));
+    pill::set(PillState::recording());
     tray::refresh();
     tauri::async_runtime::spawn(run_session(a.clone(), session, rec, audio_rx, ctl_rx, media_token));
     Ok(())
@@ -518,7 +518,7 @@ async fn switch_model() -> Result<(), String> {
     }
     start().await?;
     *a.trigger.lock() = trigger;
-    pill::flash_switched_recording(info.tag, info.name, &s.hotkeys.cancel.to_string());
+    pill::flash_switched_recording(info.tag, info.name);
     Ok(())
 }
 

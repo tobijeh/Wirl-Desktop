@@ -132,10 +132,10 @@ fn position_and_show(w: &WebviewWindow, position: PillPosition, size: wirl_core:
 /// Quick switch while recording: shows the model's tag (EN, EN+, 粵, 普) in
 /// place of the icon, and its name, for a moment; then the usual recording
 /// pill again, unless something else changed the pill meanwhile.
-pub fn flash_switched_recording(tag: &str, name: &str, cancel_hotkey: &str) {
+pub fn flash_switched_recording(tag: &str, name: &str) {
     set(PillState::recording_switched(tag, name));
     let gen = GENERATION.load(Ordering::SeqCst);
-    let back = PillState::recording(cancel_hotkey);
+    let back = PillState::recording();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(wirl_core::pill::TAG_FLASH_MS)).await;
         if GENERATION.load(Ordering::SeqCst) == gen {

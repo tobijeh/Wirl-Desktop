@@ -35,13 +35,16 @@ impl PillSize {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum PillState {
     Hidden,
-    /// The selected icon (plain), live level wave, "Esc to cancel".
-    /// Right after a quick switch, `tag` (EN, EN+, 粵, 普) shows in place of
-    /// the icon and the hint names the model, for [`TAG_FLASH_MS`].
+    /// The selected icon (plain; the purple Wirl logo by default) and the
+    /// live level wave, nothing else, like the bubble on Android. Right
+    /// after a quick switch, `tag` (EN, EN+, 粵, 普) shows in place of the
+    /// icon and `name` names the model, for [`TAG_FLASH_MS`]; then the icon
+    /// comes back.
     Recording {
-        cancel_hint: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tag: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
     /// Quick switch while not recording: the new model's tag and name,
     /// briefly. `note` explains when there was nothing to switch to.
@@ -92,19 +95,17 @@ impl PillState {
         }
     }
 
-    pub fn recording(cancel_hotkey: &str) -> Self {
-        PillState::Recording {
-            cancel_hint: format!("{cancel_hotkey} to cancel"),
-            tag: None,
-        }
+    /// Recording: icon and wave only.
+    pub fn recording() -> Self {
+        PillState::Recording { tag: None, name: None }
     }
 
     /// Recording, right after a quick switch: the model's tag in place of
-    /// the icon and its name in place of the cancel hint.
+    /// the icon, and its name beside the wave.
     pub fn recording_switched(tag: &str, name: &str) -> Self {
         PillState::Recording {
-            cancel_hint: name.to_string(),
             tag: Some(tag.to_string()),
+            name: Some(name.to_string()),
         }
     }
 
@@ -200,9 +201,11 @@ mod tests {
         assert_eq!(r.auto_hide_ms(), None, "still recording");
         let json = serde_json::to_string(&r).unwrap();
         assert!(json.contains(r#""tag":"粵""#), "{json}");
-        assert!(!serde_json::to_string(&PillState::recording("Esc"))
-            .unwrap()
-            .contains("tag"));
+        // The usual recording pill carries nothing but the icon and wave.
+        assert_eq!(
+            serde_json::to_string(&PillState::recording()).unwrap(),
+            r#"{"kind":"recording"}"#
+        );
         let m = PillState::model_switched("普", "Mandarin (普通话)", false);
         assert_eq!(m.auto_hide_ms(), Some(1_400));
         // Always shown: it answers a key the user just pressed.
@@ -222,7 +225,7 @@ mod tests {
     fn fade_timings() {
         assert_eq!(PillState::Inserted.auto_hide_ms(), Some(1_000));
         assert_eq!(PillState::cleaned("Ctrl+Alt+C").auto_hide_ms(), Some(3_000));
-        assert_eq!(PillState::recording("Esc").auto_hide_ms(), None);
+        assert_eq!(PillState::recording().auto_hide_ms(), None);
         assert_eq!(PillState::Processing.auto_hide_ms(), None);
     }
 
@@ -232,13 +235,6 @@ mod tests {
             PillState::cleaned("Ctrl+Shift+K"),
             PillState::Cleaned {
                 undo_hint: "Ctrl+Shift+K to undo".into()
-            }
-        );
-        assert_eq!(
-            PillState::recording("Esc"),
-            PillState::Recording {
-                cancel_hint: "Esc to cancel".into(),
-                tag: None,
             }
         );
     }

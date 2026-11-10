@@ -101,7 +101,7 @@ Copy selection → `UndoTracker::on_hotkey`. Same text as the last cleanup → p
 
 ## Pill states
 
-Hidden when idle. Recording (plain icon, live wave, "<Cancel> to cancel"; no ring: the pill appearing and the wave already show it's listening; right after a quick switch the model tag and name for 1.2 s), Model switched (tag + name, 1.4 s; always shown), Processing ("Cleaning up"), Inserted (1 s), Inserted + one-time clean-up tip (6 s), Cleaned + "<Clean hotkey> to undo" (3 s), Undone, Copied (amber), Error (amber, short message). The "status messages" toggle hides only the success confirmations.
+Hidden when idle. Recording (the plain icon, the purple Wirl logo by default, and the live wave, nothing else, like the bubble on Android: no cancel text, no ring; right after a quick switch the model tag replaces the icon, with the model name, for 1.2 s, then the icon is back; a missing icon falls back to the Wirl logo), Model switched (tag + name, 1.4 s; always shown), Processing ("Cleaning up"), Inserted (1 s), Inserted + one-time clean-up tip (6 s), Cleaned + "<Clean hotkey> to undo" (3 s), Undone, Copied (amber), Error (amber, short message). The "status messages" toggle hides only the success confirmations.
 
 ## Tray states
 

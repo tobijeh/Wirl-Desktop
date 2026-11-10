@@ -842,7 +842,7 @@ function startPreview() {
   if (!el) return;
   const s = S.settings;
   const states = [
-    { kind: "recording", cancelHint: `${S.hotkeys.cancel} to cancel` },
+    { kind: "recording" },
     { kind: "processing" },
     { kind: "inserted" },
     { kind: "cleaned", undoHint: `${S.hotkeys.cleanSelection} to undo` },

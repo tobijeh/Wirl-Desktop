@@ -256,9 +256,14 @@ function pageCleanup() {
 function dictForm(e) {
   return `<div class="card stack" id="dict-form">
     <h3>${e ? "Edit term" : "Add term"}</h3>
-    <input type="text" id="f-term" placeholder="Term, e.g. Sela" value="${esc(e?.term)}">
-    <input type="text" id="f-sounds" placeholder="Sounds like, separated by commas, e.g. salad, sella" value="${esc((e?.soundsLike || []).join(", "))}">
-    <input type="text" id="f-note" placeholder="Context note, e.g. my daughter's name" value="${esc(e?.note)}">
+    <label class="field"><span>Correct spelling</span>
+      <input type="text" id="f-term" placeholder="What you want typed, e.g. Sela" value="${esc(e?.term)}"></label>
+    <label class="field"><span>Wirl types it as</span>
+      <input type="text" id="f-sounds" placeholder="The wrong words Wirl types instead, e.g. salad, Stella" value="${esc((e?.soundsLike || []).join(", "))}">
+      <small>Copy them from what Wirl actually typed. Separate with commas.</small></label>
+    <label class="field"><span>Only when <span class="muted">(optional)</span></span>
+      <input type="text" id="f-note" placeholder="e.g. my brother's name, not the verb" value="${esc(e?.note)}">
+      <small>Only needed if a wrong word is also a real word you sometimes mean.</small></label>
     ${ui.dictError ? `<div class="error-text">${esc(ui.dictError)}</div>` : ""}
     <div class="row"><button class="primary" data-act="dict-save">${e ? "Save" : "Add"}</button><button class="ghost" data-act="dict-cancel">Cancel</button></div>
   </div>`;
@@ -273,6 +278,7 @@ function pageDictionary() {
   return `<div class="page">
     <h1>Dictionary</h1>
     <p class="lead">Names and words Wirl should always spell your way.</p>
+    <div class="card sync-card">${syncCard()}</div>
     <div class="row" style="margin-bottom:14px">
       <input type="search" id="dict-search" class="grow" placeholder="Search ${S.dictionary.count} terms" value="${esc(ui.search)}">
       <button class="primary" data-act="dict-add">Add term</button>
@@ -289,7 +295,7 @@ function pageDictionary() {
               .map(
                 (e) => `<div class="dict-row">
           <div class="grow"><div class="term">${esc(e.term)}</div>
-            ${e.soundsLike.length ? `<div class="chips">${e.soundsLike.map((x) => `<span class="chip">${esc(x)}</span>`).join("")}</div>` : ""}
+            ${e.soundsLike.length ? `<div class="chips"><span class="muted small">typed as</span>${e.soundsLike.map((x) => `<span class="chip">${esc(x)}</span>`).join("")}</div>` : ""}
             ${e.note ? `<div class="muted small" style="margin-top:6px">${esc(e.note)}</div>` : ""}</div>
           <button class="ghost" data-act="dict-edit" data-id="${e.id}">Edit</button>
           <button class="ghost" data-act="dict-delete" data-id="${e.id}">Delete</button>
@@ -298,56 +304,46 @@ function pageDictionary() {
               .join("")
       }
     </div>
-    <h2>Phone sync</h2>
-    <div class="card">${syncCard()}</div>
   </div>`;
 }
 
-/** The Phone sync card: phones in the group, status, pairing code, disconnect. */
+/**
+ * The Phone sync card, at the top of the Dictionary page: one compact row
+ * (phones and status, Sync now, Pair), the pairing code when open.
+ */
 function syncCard() {
   const sy = S.sync || {};
   const phones = S.phones || [];
-  const status = sy.syncing
-    ? `<span class="spinner-inline"></span><span class="muted">Syncing…</span>`
-    : sy.error
-      ? `<span class="warn-text" style="color:var(--warning)">${esc(sy.error)}</span>`
-      : sy.lastOkMs
-        ? `<span class="muted">Last sync: ${ago(sy.lastOkMs)}</span>`
-        : "";
-  const list = phones.length
-    ? phones
-        .map(
-          (p) => `<div class="row" style="padding:6px 0"><div class="grow"><div class="term">${esc(p.name)}</div>
-            <div class="muted small">Synced ${ago(p.lastSync)}</div></div></div>`,
-        )
-        .join('<div class="divider"></div>')
-    : `<div class="muted">${
-        sy.active
-          ? "No phone has joined yet. Scan the code with Wirl on your phone."
-          : "Keep the same dictionary on your phone. It works anywhere with internet, and no account is needed."
-      }</div>`;
+  let line;
+  if (sy.syncing) line = `<span class="spinner-inline"></span><span class="muted">Syncing…</span>`;
+  else if (sy.error) line = `<span style="color:var(--warning)">${esc(sy.error)}</span>`;
+  else if (phones.length)
+    line = `<span class="muted">${phones.map((p) => `${esc(p.name)} · synced ${ago(p.lastSync)}`).join(", ")}</span>`;
+  else if (sy.active) line = `<span class="muted">Waiting for a phone to scan the code.</span>`;
+  else line = `<span class="muted">Keep the same dictionary on your phone. Works anywhere, no account needed.</span>`;
+  const disconnect = phones.length
+    ? ui.confirmDisconnect
+      ? `<a class="link small" style="color:var(--warning)" data-act="disconnect-all">Click again to disconnect all phones</a>`
+      : `<a class="link small muted" data-act="disconnect-all">Disconnect all phones</a>`
+    : "";
   const qr = ui.pairing
     ? `<div class="divider"></div><div class="row" style="align-items:flex-start;gap:22px">
         <div class="qr">${ui.pairing.svg}</div>
         <div class="grow stack">
           <div>On your phone: open Wirl › <b>Computer sync</b> › <b>Pair with a computer</b>, then scan this code.</div>
           <div class="muted small">Your phone doesn't need to be on the same Wi-Fi. Everything is encrypted on your devices before it's sent.</div>
-          <div><button class="ghost" data-act="pair-close">Close</button></div>
+          <div class="row" style="gap:16px"><button class="ghost" data-act="pair-close">Close</button>${disconnect}</div>
         </div></div>`
     : "";
-  const disconnect = phones.length
-    ? ui.confirmDisconnect
-      ? `<a class="link small" style="color:var(--warning)" data-act="disconnect-all">Click again to disconnect all phones</a>`
-      : `<a class="link small muted" data-act="disconnect-all">Disconnect all phones</a>`
-    : "";
-  return `${list}
-    ${status ? `<div class="row" style="margin-top:10px;gap:8px">${status}</div>` : ""}
-    ${qr}
-    <div class="row" style="margin-top:14px;gap:12px">
-      ${ui.pairing ? "" : `<button class="primary" data-act="pair">${phones.length ? "Pair another phone" : "Pair a phone"}</button>`}
+  return `<div class="row" style="gap:12px">
+      <div class="grow" style="min-width:0">
+        <h3>Phone sync</h3>
+        <div class="sync-line">${line}</div>
+      </div>
       ${sy.active ? `<button class="ghost" data-act="sync-now" ${sy.syncing ? "disabled" : ""}>Sync now</button>` : ""}
-      <span class="grow"></span>${disconnect}
-    </div>`;
+      ${ui.pairing ? "" : `<button class="${phones.length ? "" : "primary"}" data-act="pair">${phones.length ? "Pair another" : "Pair a phone"}</button>`}
+    </div>
+    ${qr}`;
 }
 
 const HOTKEY_ROWS = [

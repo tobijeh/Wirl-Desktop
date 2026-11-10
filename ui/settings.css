@@ -674,3 +674,37 @@ body.touring main {
   animation: spin 0.8s linear infinite;
   flex: none;
 }
+
+.sync-card {
+  padding: 14px 18px;
+}
+.sync-card h3 {
+  margin: 0 0 2px;
+}
+.sync-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.field > span {
+  font-size: 13px;
+  font-weight: 700;
+}
+.field small {
+  color: var(--text-2);
+  font-size: 12px;
+}
+.chips .muted.small {
+  align-self: center;
+  margin-right: 2px;
+}

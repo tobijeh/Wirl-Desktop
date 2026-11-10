@@ -22,13 +22,14 @@ function esc(s) {
 export function renderPill(el, state, opts = {}) {
   const icon = opts.icon ? `assets/icons/${encodeURIComponent(opts.icon)}` : null;
   el.className = `pill size-${opts.size || "medium"}`;
-  const iconImg = (ring) =>
-    icon ? `<div class="badge${ring ? " ring" : ""}"><img src="${icon}" alt=""></div>` : `<div class="badge${ring ? " ring" : ""}"></div>`;
+  // The icon is always shown plain: the pill appearing and the moving wave
+  // already say "listening".
+  const iconImg = () => (icon ? `<div class="badge"><img src="${icon}" alt=""></div>` : `<div class="badge"></div>`);
   let html = "";
   switch (state.kind) {
     case "recording": {
       const bars = Array.from({ length: WAVE_BARS }, () => "<span></span>").join("");
-      html = `${iconImg(true)}<div class="wave">${bars}</div><div class="text"><span class="sub">${esc(state.cancelHint)}</span></div>`;
+      html = `${iconImg()}<div class="wave">${bars}</div><div class="text"><span class="sub">${esc(state.cancelHint)}</span></div>`;
       break;
     }
     case "processing":

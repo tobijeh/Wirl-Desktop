@@ -75,18 +75,6 @@ body {
   border-radius: 50%;
   display: block;
 }
-.pill .badge.ring img {
-  width: 76%;
-  height: 76%;
-}
-.pill .badge.ring::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 0.17em solid var(--red);
-  animation: ringpulse 1.6s ease-in-out infinite;
-}
 @keyframes ringpulse {
   50% { box-shadow: 0 0 0 0.18em rgba(229, 72, 77, 0.25); }
 }

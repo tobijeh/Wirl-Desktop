@@ -35,7 +35,7 @@ impl PillSize {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum PillState {
     Hidden,
-    /// Red ring around the selected icon, live level wave, "Esc to cancel".
+    /// The selected icon (plain), live level wave, "Esc to cancel".
     Recording {
         cancel_hint: String,
     },

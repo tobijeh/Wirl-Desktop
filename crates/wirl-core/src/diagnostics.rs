@@ -50,6 +50,10 @@ pub struct DiagEntry {
     /// Claude's connection: "warm" (reused, open from before) or "new".
     #[serde(default)]
     pub connection: Option<String>,
+    /// Plain notes on what happened (why nothing was inserted, which app
+    /// was in front when pasting, keys still held, other dictation apps).
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 impl DiagEntry {
@@ -67,6 +71,7 @@ impl DiagEntry {
             cleaned: None,
             inserted: None,
             connection: None,
+            notes: Vec::new(),
         }
     }
     pub fn stage(mut self, name: impl Into<String>, ms: u64) -> Self {
@@ -151,6 +156,9 @@ pub fn report(header: &[String], entries: &[DiagEntry], time: impl Fn(i64) -> St
                 out.push_str(&format!("{label}: {}\n", clip(t)));
             }
         }
+        for n in &e.notes {
+            out.push_str(&format!("Note: {n}\n"));
+        }
         if let Some(err) = &e.error {
             out.push_str(&format!("Error: {err}\n"));
         }
@@ -173,6 +181,7 @@ mod tests {
         e.cleaned = Some("Send it tomorrow.".into());
         e.inserted = Some("Send it tomorrow.".into());
         e.connection = Some("warm".into());
+        e.notes.push("Pasted into notepad.exe, the app you started in".into());
         let r = report(&["Version: 0.1.9".into(), "API key: saved".into()], &[e], |_| {
             "12:00:00".into()
         });
@@ -183,6 +192,7 @@ mod tests {
             r.contains("Heard: um send it tomorrow\nClaude returned: Send it tomorrow.\nInserted: Send it tomorrow.")
         );
         assert!(r.contains("Claude connection: warm"));
+        assert!(r.contains("Note: Pasted into notepad.exe, the app you started in"));
         assert!(!r.contains("Error:"));
     }
 

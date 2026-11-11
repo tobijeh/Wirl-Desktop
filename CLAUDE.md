@@ -60,8 +60,8 @@ ui/                   settings.html/js, pill.html/js, pill-view.js (shared rende
 2. Start: pause playing media, open mic, register Cancel, warm the Claude connection, make sure the model is loaded, show the Recording pill.
 3. While recording, the chunker cuts at natural pauses after ≥5 s (forced by 10 s); each speech chunk is transcribed in the background with `audio_ctx` sized to its length and dictionary terms as the initial prompt.
 4. Stop: the final chunk is sent immediately. Recordings under 1 s or with no speech are discarded silently. Pauses and the end of speech are found relative to the room's background (measured in the first 240 ms), not only the fixed speech threshold, so soft speakers, quiet microphones and trailing-off last words aren't trimmed as silence (`Chunker::is_voice`; tests in `audio.rs`).
-5. Join → filter. Nothing left = no speech (silent discard).
-6. Cleanup with matching dictionary entries. Failure inserts the raw transcript and shows the reason.
+5. Join → filter. Nothing left = no speech (silent discard). **Fewer than 3 letters** (`pipeline::MIN_LETTERS`, Chinese characters count) is noise: Claude isn't asked, nothing is inserted or shown, and Diagnostics notes it (same rule as Android's `SpeechGate`).
+6. Cleanup with matching dictionary entries. Failure inserts the raw transcript and shows the reason. A reply that's empty, has no letters or digits (a lone "."), or is a remark about the recording ("No speech detected.", `pipeline::is_recording_remark`, Android's list) inserts nothing and shows nothing.
 7. Insert via clipboard + Ctrl+V, restore the clipboard if nobody changed it. Blocked (elevated window etc.) → leave text on clipboard, "Copied, press Ctrl+V".
 
 ### Clean up selection
@@ -95,6 +95,7 @@ Copy selection → `UndoTracker::on_hotkey`. Same text as the last cleanup → p
 
 - Hidden until the version in About is clicked 7 times (`reveal_developer_options`), like Android. Shows the speech engine status (running, GPU/CPU, restarts, last error), the data folder, and the last 20 attempts (`wirl_core::diagnostics`, in memory only, never saved or sent).
 - Each entry: per-stage timings (engine chunks, "… after stop", Claude first byte and total, Insert, and **Stop to insert** for dictations), model, thinking, **Claude connection** ("warm (already open)" / "new": `CleanupResult::warm_connection`, a request within 110 s of the last answer; the pool keeps connections 120 s), insert method, error, and the text at each step like Android: **Heard** (the filtered transcript, or "Selected" for clean-up), **Claude returned**, **Inserted**.
+- **Paste notes** on each dictation and clean-up (`add_paste_notes`): characters pasted (and how many are letters or digits), the program in front when pasting and whether it's the window the dictation started in (`platform::foreground_app`, program file name only, never the window title), Ctrl/Alt/Shift/Win still held after the 1.5 s wait (`held_modifiers`), and other dictation apps running (`running_dictation_apps`: Wispr Flow, Superwhisper, Dragon, Windows Voice Access, Talon). Discards note why nothing was inserted. These are for "Inserted but nothing appeared" reports: "Inserted" only means Ctrl+V was sent.
 - **Copy report** (`copy_diagnostics`) puts a plain-text report on the clipboard: version, system, model and quick switch, engine status, cleanup on/off, API key saved/missing (never the key), hotkeys, attention items, phone sync, log folder, then every entry (`diagnostics::report`, text capped at 2,000 characters each). The page says it includes recent dictated text. **Open log folder** (`open_log_folder`, `platform::open_folder`) opens the folder with `wirl.log`.
 
 ## Welcome tour (onboarding)

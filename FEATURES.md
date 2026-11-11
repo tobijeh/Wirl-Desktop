@@ -17,6 +17,7 @@ Status per platform.
 | | Dictionary terms as Whisper initial prompt | ✅ | ❔ |
 | | Sound-tag and lone-hallucination filtering | ✅ | ❔ |
 | | Silent discard (< 1 s or no speech) | ✅ | ❔ |
+| | Nothing inserted without words: fewer than 3 letters isn't sent to Claude; a reply that's only punctuation or a remark about the recording is dropped | ✅ | ✅ |
 | | Insert at cursor via clipboard paste, clipboard restored | ✅ logic / 🟢 Windows | ❔ |
 | | "Copied, press Ctrl+V" fallback when paste is blocked | ✅ logic / 🟢 Windows | ❔ |
 | | Pause media during dictation (Windows media controls) | 🟢 | ❔ |
@@ -73,5 +74,6 @@ Status per platform.
 | | 30 s watchdog | ✅ | ❔ |
 | | Diagnostics: last 20 entries with per-stage timing, stop-to-insert total, Claude connection warm/new, and the text at each step (heard, Claude's reply, inserted), in memory only | ✅ | ✅ |
 | | Copy report (plain text to the clipboard, never the API key) and Open log folder (wirl.log) | ✅ logic / 🟢 Windows | ➖ |
+| | Paste notes: characters pasted, program in front vs. where you started, keys still held, other dictation apps running (e.g. Wispr Flow) | 🟢 | ➖ |
 | **Updates** | Signed auto-updates from GitHub Releases, daily check, "Restart to update" | 🟢 (signing key set up; needs a check that an installed copy updates) | ⬜ |
 | | CI on pull requests, automatic release on main | 🟢 | ⬜ |

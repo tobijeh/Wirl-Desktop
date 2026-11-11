@@ -27,6 +27,53 @@ pub fn transcript_or_none(joined: &str) -> Option<String> {
     }
 }
 
+/// Fewer letters than this is not a sentence: it's noise or a stray sound
+/// (Whisper writing "." or "Hm."), so Claude isn't called and nothing is
+/// inserted. Same rule as Android (`SpeechGate.MIN_LETTERS`). Chinese
+/// characters count as letters.
+pub const MIN_LETTERS: usize = 3;
+
+/// Whether the heard text has enough letters to be worth cleaning up and
+/// inserting.
+pub fn has_words(spoken: &str) -> bool {
+    spoken.chars().filter(|c| c.is_alphabetic()).count() >= MIN_LETTERS
+}
+
+/// Replies longer than this are real text, even if they mention silence.
+const MAX_REMARK_WORDS: usize = 12;
+
+/// True when Claude's reply talks about the recording ("No speech
+/// detected.", "Unclear audio, please try again.") instead of giving text
+/// for the field. The whole reply must be such a remark. Same list as
+/// Android (`SpeechGate.isRecordingRemark`).
+pub fn is_recording_remark(reply: &str) -> bool {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let text = reply.trim();
+    if text.is_empty() || text.split_whitespace().count() > MAX_REMARK_WORDS {
+        return false;
+    }
+    let re = RE.get_or_init(|| {
+        Regex::new(concat!(
+            r"(?i)^(?:no (?:speech|words|audio|intended words)(?: (?:was |were )?(?:detected|heard|found|recorded))?|",
+            r"nothing (?:was )?(?:said|spoken|heard)|silence|silent|",
+            r"(?:the )?(?:audio|recording|speech) (?:is|was|seems|sounds) (?:unclear|silent|empty|inaudible)|",
+            r"unclear (?:audio|speech)(?:, please try again)?|inaudible|",
+            r"i (?:can't|cannot|couldn't|could not) (?:hear|make out) (?:anything|the audio|you)|",
+            r"(?:please )?try (?:recording|speaking) again|sorry,? i (?:didn't|did not|can't|cannot) hear)[.!]?$"
+        ))
+        .unwrap()
+    });
+    re.is_match(text)
+}
+
+/// A reply with no letters or digits at all ("." or "…") is never text
+/// worth inserting.
+fn has_content(reply: &str) -> bool {
+    reply.chars().any(|c| c.is_alphanumeric())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Final {
     /// Nothing to insert: pill disappears, no message.
@@ -43,7 +90,9 @@ pub fn after_cleanup(raw: &str, cleanup: Option<Result<String, CleanupError>>) -
             text: raw.to_string(),
             warning: None,
         },
-        Some(Ok(t)) if t.trim().is_empty() => Final::Discard,
+        // Nothing, only punctuation, or a remark about the recording:
+        // nothing is inserted and nothing is shown.
+        Some(Ok(t)) if !has_content(&t) || is_recording_remark(&t) => Final::Discard,
         Some(Ok(t)) => Final::Insert { text: t, warning: None },
         Some(Err(e)) => Final::Insert {
             text: raw.to_string(),
@@ -100,5 +149,39 @@ mod tests {
             }
         );
         assert_eq!(after_cleanup("raw", Some(Ok("  ".into()))), Final::Discard);
+    }
+
+    #[test]
+    fn noise_never_inserts_anything() {
+        // Too few letters: Claude isn't asked.
+        for noise in [".", "…", "Hm.", "Oh", "Mm", "嗯"] {
+            assert!(!has_words(noise), "{noise}");
+        }
+        for words in ["Yes.", "Call me", "你好嗎", "OK go"] {
+            assert!(has_words(words), "{words}");
+        }
+        // Claude's reply is only punctuation, or a remark about the recording.
+        for reply in [
+            ".",
+            "…",
+            " - ",
+            "No speech detected.",
+            "Unclear audio, please try again.",
+            "Silence",
+            "inaudible",
+        ] {
+            assert_eq!(after_cleanup("raw", Some(Ok(reply.into()))), Final::Discard, "{reply}");
+        }
+        // A real sentence that mentions silence is kept.
+        let real = "There was silence in the room after the meeting ended.";
+        assert!(!is_recording_remark(real));
+        assert!(matches!(
+            after_cleanup("raw", Some(Ok(real.into()))),
+            Final::Insert { .. }
+        ));
+        assert!(matches!(
+            after_cleanup("raw", Some(Ok("42".into()))),
+            Final::Insert { .. }
+        ));
     }
 }

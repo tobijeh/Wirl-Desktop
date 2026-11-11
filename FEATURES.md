@@ -68,9 +68,10 @@ Status per platform.
 | | Setup checklist, shown on first run; Test dictation | 🟢 | ❔ |
 | | Start with Windows | 🟢 | ⬜ |
 | | Reset to defaults (keeps key, dictionary, pairing) | ✅ | ❔ |
-| | Developer options (7 clicks on version) with diagnostics | 🟢 | ❔ |
+| | Developer options (7 clicks on version in About) with diagnostics | 🟢 | 🟢 |
 | **Reliability** | Timeouts on model load, transcription, API | ✅ | ❔ |
 | | 30 s watchdog | ✅ | ❔ |
-| | Diagnostics: last 20 entries with per-stage timing | ✅ | ❔ |
+| | Diagnostics: last 20 entries with per-stage timing, stop-to-insert total, Claude connection warm/new, and the text at each step (heard, Claude's reply, inserted), in memory only | ✅ | ✅ |
+| | Copy report (plain text to the clipboard, never the API key) and Open log folder (wirl.log) | ✅ logic / 🟢 Windows | ➖ |
 | **Updates** | Signed auto-updates from GitHub Releases, daily check, "Restart to update" | 🟢 (signing key set up; needs a check that an installed copy updates) | ⬜ |
 | | CI on pull requests, automatic release on main | 🟢 | ⬜ |

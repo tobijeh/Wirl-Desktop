@@ -80,13 +80,21 @@ pub struct CleanupResult {
     pub first_byte_ms: u64,
     pub total_ms: u64,
     pub stop_reason: Option<String>,
+    /// The connection to Claude was already open (warmed at record start or
+    /// used recently), so no new TLS handshake was needed.
+    pub warm_connection: bool,
 }
 
 #[derive(Clone)]
 pub struct ClaudeClient {
     http: reqwest::Client,
     url: String,
+    /// When the server last answered; the pool keeps a connection for 120 s.
+    last_contact: std::sync::Arc<std::sync::Mutex<Option<Instant>>>,
 }
+
+/// Connections idle longer than this may have been closed by the pool.
+const WARM_WINDOW: Duration = Duration::from_secs(110);
 
 impl Default for ClaudeClient {
     fn default() -> Self {
@@ -111,13 +119,38 @@ impl ClaudeClient {
         ClaudeClient {
             http,
             url: url.to_string(),
+            last_contact: Default::default(),
         }
     }
 
     /// Opens (or keeps open) the TLS connection so the real request starts
     /// faster. Called when recording starts. Errors are ignored.
     pub async fn warm(&self) {
-        let _ = self.http.head(&self.url).timeout(Duration::from_secs(5)).send().await;
+        if self
+            .http
+            .head(&self.url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .is_ok()
+        {
+            self.touch();
+        }
+    }
+
+    fn touch(&self) {
+        if let Ok(mut t) = self.last_contact.lock() {
+            *t = Some(Instant::now());
+        }
+    }
+
+    /// Whether a connection is probably still open from a recent request.
+    fn is_warm(&self) -> bool {
+        self.last_contact
+            .lock()
+            .ok()
+            .and_then(|t| *t)
+            .is_some_and(|t| t.elapsed() < WARM_WINDOW)
     }
 
     /// The one shared cleanup function for dictation and clean-selection.
@@ -142,6 +175,7 @@ impl ClaudeClient {
     }
 
     async fn send(&self, api_key: &str, body: &serde_json::Value) -> Result<CleanupResult, CleanupError> {
+        let warm = self.is_warm();
         let start = Instant::now();
         let resp = self
             .http
@@ -174,11 +208,13 @@ impl ClaudeClient {
         if parser.stop_reason.as_deref() == Some("refusal") {
             return Err(CleanupError::Refused);
         }
+        self.touch();
         Ok(CleanupResult {
             text: postprocess_output(&parser.text),
             first_byte_ms: first_byte_ms.unwrap_or(0),
             total_ms: start.elapsed().as_millis() as u64,
             stop_reason: parser.stop_reason,
+            warm_connection: warm,
         })
     }
 }

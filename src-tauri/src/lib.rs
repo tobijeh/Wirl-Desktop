@@ -73,6 +73,8 @@ pub fn run() {
             commands::delete_model,
             commands::use_model,
             commands::set_quick_switch,
+            commands::copy_diagnostics,
+            commands::open_log_folder,
             commands::set_api_key,
             commands::clear_api_key,
             commands::dict_add,

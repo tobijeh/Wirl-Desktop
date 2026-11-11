@@ -729,3 +729,10 @@ body.touring main {
 }
 .model-card .tick.on { background: var(--accent); border-color: var(--accent); }
 .model-card .tick:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Diagnostics: the text at each step, kept readable but compact. */
+.diag .diag-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}

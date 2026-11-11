@@ -443,3 +443,12 @@ pub fn microphone_allowed() -> bool {
     let desktop = reg_string(&format!(r"{base}\NonPackaged"), "Value");
     !(global.as_deref() == Some("Deny") || desktop.as_deref() == Some("Deny"))
 }
+
+/// Opens a folder in File Explorer.
+pub fn open_folder(path: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new("explorer")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}

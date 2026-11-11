@@ -542,14 +542,30 @@ function pageAbout() {
       dev && diag
         ? `<h2>Developer options</h2>
       <div class="card">
-        <h3>Diagnostics</h3>
-        <div class="muted small" style="margin:4px 0 12px">Speech engine: ${diag.sidecar.running ? "running" : "stopped"}${diag.sidecar.gpu ? " (GPU)" : " (CPU)"} · restarts: ${diag.sidecar.restarts}${diag.sidecar.lastError ? ` · last: ${esc(diag.sidecar.lastError)}` : ""}<br>Data folder: ${esc(diag.dataFolder)}</div>
+        <div class="row">
+          <div class="grow"><h3>Diagnostics</h3>
+            <div class="muted small">The last 20 attempts, newest first. Kept on this computer only.</div></div>
+          <button class="primary" data-act="copy-diagnostics">Copy report</button>
+          <button data-act="open-log-folder">Open log folder</button>
+        </div>
+        <div class="muted small" style="margin:10px 0 12px">Copy report puts everything below on the clipboard, including what you recently dictated, so you can paste it into a message. It never includes your API key.<br>
+          Speech engine: ${diag.sidecar.running ? "running" : "stopped"}${diag.sidecar.gpu ? " (GPU)" : " (CPU)"} · restarts: ${diag.sidecar.restarts}${diag.sidecar.lastError ? ` · last: ${esc(diag.sidecar.lastError)}` : ""}<br>Data folder: ${esc(diag.dataFolder)}</div>
+        ${diag.entries.length ? "" : `<div class="muted">No attempts yet. Dictate once, then come back here.</div>`}
         <table class="diag"><tr><th>When</th><th>What</th><th>Timing</th><th>Details</th></tr>
         ${diag.entries
           .map(
             (e) => `<tr><td>${new Date(e.atMs).toLocaleTimeString()}</td><td>${esc(e.summary)}</td>
           <td>${e.stages.map((s) => `${esc(s.name)}: ${s.ms} ms`).join("<br>")}</td>
-          <td>${[e.model && `Model: ${esc(e.model)}`, e.thinking !== null && e.thinking !== undefined ? `Thinking: ${e.thinking ? "on" : "off"}` : "", e.insertMethod && `Insert: ${esc(e.insertMethod)}`, e.error && `<span class="warn-text" style="color:var(--warning)">${esc(e.error)}</span>`]
+          <td>${[
+            e.model && `Model: ${esc(e.model)}`,
+            e.thinking !== null && e.thinking !== undefined ? `Thinking: ${e.thinking ? "on" : "off"}` : "",
+            e.connection && `Claude connection: ${esc(e.connection)}`,
+            e.insertMethod && `Insert: ${esc(e.insertMethod)}`,
+            e.heard && `<span class="diag-text">${e.kind === "cleanSelection" ? "Selected" : "Heard"}: ${esc(e.heard)}</span>`,
+            e.cleaned && `<span class="diag-text">Claude returned: ${esc(e.cleaned)}</span>`,
+            e.inserted && e.inserted !== e.cleaned && `<span class="diag-text">Inserted: ${esc(e.inserted)}</span>`,
+            e.error && `<span class="warn-text" style="color:var(--warning)">${esc(e.error)}</span>`,
+          ]
             .filter(Boolean)
             .join("<br>")}</td></tr>`,
           )
@@ -1122,6 +1138,14 @@ async function act(name, el) {
           await invoke("reveal_developer_options");
           toast("Developer options are on");
         }
+        break;
+      case "copy-diagnostics": {
+        const n = await invoke("copy_diagnostics", { tzOffsetMin: new Date().getTimezoneOffset() });
+        toast(n ? `Report copied (${n} ${n === 1 ? "attempt" : "attempts"}). Paste it into a message.` : "Report copied. No attempts yet.");
+        break;
+      }
+      case "open-log-folder":
+        await invoke("open_log_folder");
         break;
       case "check-updates":
         await invoke("check_updates");

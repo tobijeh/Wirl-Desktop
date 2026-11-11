@@ -3,7 +3,7 @@
 //! clipboard/keyboard work runs on blocking worker threads.
 
 use crate::app::{self, App, Phase};
-use crate::platform::{self, SystemInsert};
+use crate::platform::{self, PasteReport, SystemInsert};
 use crate::{audio, hotkeys, pill, tray};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -114,6 +114,12 @@ async fn start() -> Result<(), String> {
         *phase = Phase::Recording;
     }
     let session = a.session.fetch_add(1, Ordering::SeqCst) + 1;
+    // Where the text should go: the app in front when recording starts
+    // (diagnostics compare it with the app in front when pasting).
+    let target = tauri::async_runtime::spawn_blocking(platform::foreground_app)
+        .await
+        .ok()
+        .flatten();
     let model_path = a.model_path(s.model);
     if !a.model_ready(s.model) {
         reset_to_idle(&a);
@@ -176,7 +182,15 @@ async fn start() -> Result<(), String> {
     hotkeys::set_cancel_active(true);
     pill::set(PillState::recording());
     tray::refresh();
-    tauri::async_runtime::spawn(run_session(a.clone(), session, rec, audio_rx, ctl_rx, media_token));
+    tauri::async_runtime::spawn(run_session(
+        a.clone(),
+        session,
+        rec,
+        audio_rx,
+        ctl_rx,
+        media_token,
+        target,
+    ));
     Ok(())
 }
 
@@ -229,6 +243,7 @@ async fn run_session(
     mut audio_rx: mpsc::UnboundedReceiver<Vec<f32>>,
     mut ctl_rx: mpsc::UnboundedReceiver<Control>,
     media: Option<platform::MediaPauseToken>,
+    target: Option<platform::AppInfo>,
 ) {
     let s = a.settings();
     let started = Instant::now();
@@ -346,6 +361,19 @@ async fn run_session(
         return;
     };
     diag.heard = Some(raw.clone());
+    // Noise or a stray sound (fewer than 3 letters): nothing is sent to
+    // Claude, nothing is inserted, nothing is shown. Same rule as Android.
+    if !pipeline::has_words(&raw) {
+        diag.summary = format!("{} · no words, nothing inserted", diag.summary);
+        diag.notes.push(format!(
+            "Heard fewer than {} letters, so it was treated as noise: Claude wasn't asked and nothing was inserted.",
+            pipeline::MIN_LETTERS
+        ));
+        pill::set(PillState::Hidden);
+        a.log_diag(diag);
+        end_session(&a, session);
+        return;
+    }
 
     // Claude cleanup (or raw text if cleanup is off).
     let cleanup = if s.cleanup_enabled {
@@ -403,16 +431,20 @@ async fn run_session(
     }
     match pipeline::after_cleanup(&raw, cleanup) {
         Final::Discard => {
+            diag.summary = format!("{} · nothing inserted", diag.summary);
+            diag.notes.push(
+                "Claude's reply had no words (empty, only punctuation, or a remark about the recording), so nothing was inserted."
+                    .into(),
+            );
             pill::set(PillState::Hidden);
         }
         Final::Insert { text, warning } => {
             diag.inserted = Some(text.clone());
             let t = Instant::now();
-            let outcome = tauri::async_runtime::spawn_blocking(move || insert_text(&mut SystemInsert, &text))
-                .await
-                .unwrap_or_else(|e| InsertOutcome::Failed(e.to_string()));
+            let (outcome, report) = paste_with_report(text).await;
             diag.push_stage("Insert", t.elapsed().as_millis() as u64);
             diag.push_stage("Stop to insert", stop_at.elapsed().as_millis() as u64);
+            add_paste_notes(&mut diag, target.as_ref(), &report);
             report_insert(&mut diag, &outcome);
             let pasted = matches!(outcome, InsertOutcome::Pasted { .. });
             let tip = pasted && record_dictation(&a);
@@ -451,6 +483,55 @@ fn record_cleanup(a: &App) {
     a.settings.write().usage.record_cleanup();
     a.save_settings();
     a.notify();
+}
+
+/// Pastes `text` and reports what was around the paste (for Diagnostics).
+async fn paste_with_report(text: String) -> (InsertOutcome, PasteReport) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut p = SystemInsert::default();
+        let outcome = insert_text(&mut p, &text);
+        p.report.other_apps = platform::running_dictation_apps();
+        (outcome, p.report)
+    })
+    .await
+    .unwrap_or_else(|e| (InsertOutcome::Failed(e.to_string()), PasteReport::default()))
+}
+
+/// Diagnostics notes for one paste: how much was pasted, into which app
+/// (and whether it's the app the dictation started in), keys still held,
+/// and other dictation apps running. Program names only, never window titles.
+fn add_paste_notes(diag: &mut DiagEntry, started_in: Option<&platform::AppInfo>, report: &PasteReport) {
+    if let Some(text) = &diag.inserted {
+        let chars = text.chars().count();
+        let visible = text.chars().filter(|c| c.is_alphanumeric()).count();
+        diag.notes.push(format!(
+            "Pasted {chars} character{} ({visible} letters or digits)",
+            if chars == 1 { "" } else { "s" }
+        ));
+    }
+    match (started_in, &report.app) {
+        (Some(s), Some(p)) if s.window == p.window => diag
+            .notes
+            .push(format!("Pasted into {}, the window you started in", p.program)),
+        (Some(s), Some(p)) => diag.notes.push(format!(
+            "Pasted into {}, but you started in {} (the window in front changed)",
+            p.program, s.program
+        )),
+        (None, Some(p)) => diag.notes.push(format!("Pasted into {}", p.program)),
+        (_, None) => diag.notes.push("No window was in front when pasting".into()),
+    }
+    if !report.keys_held.is_empty() {
+        diag.notes.push(format!(
+            "Keys still held when pasting: {} (Ctrl+V may have become another shortcut)",
+            report.keys_held.join(", ")
+        ));
+    }
+    if !report.other_apps.is_empty() {
+        diag.notes.push(format!(
+            "Also running: {} (it may use the same keys or the clipboard)",
+            report.other_apps.join(", ")
+        ));
+    }
 }
 
 /// Diagnostics wording for whether Claude's connection was already open.
@@ -559,9 +640,7 @@ pub fn on_clean_selection() {
 }
 
 async fn paste(text: String) -> InsertOutcome {
-    tauri::async_runtime::spawn_blocking(move || insert_text(&mut SystemInsert, &text))
-        .await
-        .unwrap_or_else(|e| InsertOutcome::Failed(e.to_string()))
+    paste_with_report(text).await.0
 }
 
 async fn clean_selection(a: Arc<App>, session: u64) {
@@ -642,8 +721,9 @@ async fn clean_selection(a: Arc<App>, session: u64) {
                     diag.inserted = Some(c.text.clone());
                     let cleaned = c.text.clone();
                     let t = Instant::now();
-                    let outcome = paste(cleaned.clone()).await;
+                    let (outcome, report) = paste_with_report(cleaned.clone()).await;
                     diag.push_stage("Insert", t.elapsed().as_millis() as u64);
+                    add_paste_notes(&mut diag, None, &report);
                     report_insert(&mut diag, &outcome);
                     match outcome {
                         InsertOutcome::Pasted { .. } => {

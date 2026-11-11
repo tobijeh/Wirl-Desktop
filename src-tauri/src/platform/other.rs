@@ -29,7 +29,18 @@ pub fn can_paste() -> Result<(), PasteError> {
 pub fn send_ctrl_key(_key: char) -> Result<(), PasteError> {
     Err(PasteError::Failed("not supported on this OS".into()))
 }
-pub fn wait_modifiers_released(_timeout: Duration) {}
+pub fn wait_modifiers_released(_timeout: Duration) -> bool {
+    true
+}
+pub fn held_modifiers() -> Vec<&'static str> {
+    Vec::new()
+}
+pub fn foreground_app() -> Option<crate::platform::AppInfo> {
+    None
+}
+pub fn running_dictation_apps() -> Vec<String> {
+    Vec::new()
+}
 pub fn select_back(_chars: usize) -> Result<(), PasteError> {
     Err(PasteError::Failed("not supported on this OS".into()))
 }

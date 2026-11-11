@@ -3,7 +3,7 @@
 
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
-use windows::core::{HSTRING, PCWSTR};
+use windows::core::{HSTRING, PCWSTR, PWSTR};
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSessionManager as MediaManager,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus,
@@ -15,10 +15,14 @@ use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardSequenceNumber, OpenClipboard,
     RegisterClipboardFormatW, SetClipboardData,
 };
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_EXTENDEDKEY,
@@ -266,18 +270,105 @@ fn is_down(vk: VIRTUAL_KEY) -> bool {
 }
 
 /// Waits until the user has let go of Ctrl/Alt/Shift/Win so our Ctrl+V
-/// isn't combined with the hotkey's modifiers.
-pub fn wait_modifiers_released(timeout: Duration) {
+/// isn't combined with the hotkey's modifiers. Returns false if they were
+/// still held when the timeout ran out.
+pub fn wait_modifiers_released(timeout: Duration) -> bool {
     let start = Instant::now();
     let mods = [
         VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN, VK_LMENU, VK_RMENU, VK_LSHIFT,
     ];
     while start.elapsed() < timeout {
         if !mods.iter().any(|m| is_down(*m)) {
-            return;
+            return true;
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+    false
+}
+
+/// Modifier keys held down right now (diagnostics).
+pub fn held_modifiers() -> Vec<&'static str> {
+    let mut v = Vec::new();
+    for (vk, name) in [(VK_CONTROL, "Ctrl"), (VK_MENU, "Alt"), (VK_SHIFT, "Shift")] {
+        if is_down(vk) {
+            v.push(name);
+        }
+    }
+    if is_down(VK_LWIN) || is_down(VK_RWIN) {
+        v.push("Win");
+    }
+    v
+}
+
+/// The window in front and its program's file name (e.g. "WINWORD.EXE").
+/// The window title isn't read, so document names stay out of diagnostics.
+pub fn foreground_app() -> Option<crate::platform::AppInfo> {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(fg, Some(&mut pid));
+        Some(crate::platform::AppInfo {
+            window: fg.0 as isize,
+            program: process_name(pid).unwrap_or_else(|| "unknown program".into()),
+        })
+    }
+}
+
+fn process_name(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len).is_ok();
+        let _ = CloseHandle(h);
+        if !ok {
+            return None;
+        }
+        let path = String::from_utf16_lossy(&buf[..len as usize]);
+        path.rsplit(['\\', '/']).next().map(|s| s.to_string())
+    }
+}
+
+/// Other dictation apps that are running (they can grab the same keys or
+/// the clipboard). Matched by program name.
+pub fn running_dictation_apps() -> Vec<String> {
+    const KNOWN: &[(&str, &str)] = &[
+        ("wispr", "Wispr Flow"),
+        ("superwhisper", "Superwhisper"),
+        ("natspeak", "Dragon"),
+        ("dragonbar", "Dragon"),
+        ("voiceaccess", "Windows Voice Access"),
+        ("talon", "Talon"),
+    ];
+    let mut found: Vec<String> = Vec::new();
+    unsafe {
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return found;
+        };
+        let mut e = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut more = Process32FirstW(snap, &mut e).is_ok();
+        while more {
+            let len = e.szExeFile.iter().position(|&c| c == 0).unwrap_or(e.szExeFile.len());
+            let exe = String::from_utf16_lossy(&e.szExeFile[..len]).to_lowercase();
+            for (needle, name) in KNOWN {
+                if exe.contains(needle) && !found.iter().any(|f| f == name) {
+                    found.push(name.to_string());
+                }
+            }
+            more = Process32NextW(snap, &mut e).is_ok();
+        }
+        let _ = CloseHandle(snap);
+    }
+    found
 }
 
 /// Selects `chars` characters to the left of the caret (Shift+Left).

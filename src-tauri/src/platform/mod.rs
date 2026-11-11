@@ -15,8 +15,30 @@ mod other;
 #[cfg(not(windows))]
 pub use self::other::*;
 
+/// The window in front (diagnostics): its handle, to tell whether it's the
+/// same window, and its program's file name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppInfo {
+    pub window: isize,
+    pub program: String,
+}
+
+/// What happened around the paste, for Diagnostics.
+#[derive(Debug, Clone, Default)]
+pub struct PasteReport {
+    /// The app in front when Ctrl+V was sent.
+    pub app: Option<AppInfo>,
+    /// Modifier keys still held when Ctrl+V was sent (after waiting).
+    pub keys_held: Vec<&'static str>,
+    /// Other dictation apps running at the time.
+    pub other_apps: Vec<String>,
+}
+
 /// The real insert platform used by `wirl_core::insert::insert_text`.
-pub struct SystemInsert;
+#[derive(Default)]
+pub struct SystemInsert {
+    pub report: PasteReport,
+}
 
 impl InsertPlatform for SystemInsert {
     type Snapshot = ClipboardSnapshot;
@@ -37,7 +59,10 @@ impl InsertPlatform for SystemInsert {
         can_paste()
     }
     fn send_paste(&mut self) -> Result<(), PasteError> {
-        wait_modifiers_released(Duration::from_millis(1500));
+        if !wait_modifiers_released(Duration::from_millis(1500)) {
+            self.report.keys_held = held_modifiers();
+        }
+        self.report.app = foreground_app();
         send_ctrl_key('V')
     }
     fn sleep(&mut self, d: Duration) {

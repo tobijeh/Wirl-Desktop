@@ -564,6 +564,7 @@ function pageAbout() {
             e.heard && `<span class="diag-text">${e.kind === "cleanSelection" ? "Selected" : "Heard"}: ${esc(e.heard)}</span>`,
             e.cleaned && `<span class="diag-text">Claude returned: ${esc(e.cleaned)}</span>`,
             e.inserted && e.inserted !== e.cleaned && `<span class="diag-text">Inserted: ${esc(e.inserted)}</span>`,
+            ...(e.notes || []).map((n) => `<span class="diag-note">${esc(n)}</span>`),
             e.error && `<span class="warn-text" style="color:var(--warning)">${esc(e.error)}</span>`,
           ]
             .filter(Boolean)

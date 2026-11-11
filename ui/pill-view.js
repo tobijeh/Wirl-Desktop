@@ -10,6 +10,9 @@ const CLIP =
 
 export const WAVE_BARS = 9;
 
+/** The purple Wirl logo (icons.json default). */
+const DEFAULT_ICON = "assets/icons/swirl.png";
+
 /** The model's short label in the badge's place (quick switch). */
 function tagBadge(tag) {
   const t = String(tag ?? "");
@@ -30,15 +33,19 @@ export function renderPill(el, state, opts = {}) {
   el.className = `pill size-${opts.size || "medium"}`;
   // The icon is always shown plain: the pill appearing and the moving wave
   // already say "listening".
-  const iconImg = () => (icon ? `<div class="badge"><img src="${icon}" alt=""></div>` : `<div class="badge"></div>`);
+  // Falls back to the purple Wirl logo if no icon is set or it can't load.
+  const iconImg = () =>
+    `<div class="badge"><img src="${icon || DEFAULT_ICON}" alt="" onerror="if(!this.dataset.f){this.dataset.f=1;this.src='${DEFAULT_ICON}'}"></div>`;
   let html = "";
   switch (state.kind) {
     case "recording": {
       const bars = Array.from({ length: WAVE_BARS }, () => "<span></span>").join("");
-      // Right after a quick switch the model's tag (EN, 粵, ...) stands in for
-      // the icon for a moment, and the hint names the model.
+      // Icon and wave only, like the bubble on the phone. Right after a quick
+      // switch the model's tag (EN, 粵, ...) stands in for the icon for a
+      // moment, with the model's name beside the wave; then the icon is back.
       const badge = state.tag ? tagBadge(state.tag) : iconImg();
-      html = `${badge}<div class="wave">${bars}</div><div class="text"><span class="sub">${esc(state.cancelHint)}</span></div>`;
+      const name = state.name ? `<div class="text"><span class="sub">${esc(state.name)}</span></div>` : "";
+      html = `${badge}<div class="wave">${bars}</div>${name}`;
       break;
     }
     case "modelSwitched":

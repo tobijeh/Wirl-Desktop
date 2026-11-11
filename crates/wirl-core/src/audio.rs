@@ -120,6 +120,11 @@ pub struct Chunk {
     pub index: usize,
     pub samples: Vec<f32>,
     pub has_speech: bool,
+    /// No clear speech, but some faint voice, in a recording that has
+    /// speech elsewhere: often the quiet end of a sentence cut off by a
+    /// pause. Worth transcribing, keeping the text only if it's real words
+    /// (`pipeline::weak_chunk_text`).
+    pub weak_speech: bool,
     pub is_final: bool,
 }
 
@@ -134,20 +139,43 @@ impl Chunk {
 /// Frames used to measure the room when the microphone opens (240 ms).
 const WARMUP_FRAMES: usize = 8;
 
+/// The room is only measured from a steady sound: loudest frame at most this
+/// many times the quietest. Fans and hum stay well within it; speech doesn't.
+const WARMUP_STEADY_RATIO: f32 = 2.5;
+
 /// Quiet voice counts as speech once it lasts this many frames in a row
-/// (150 ms): longer than a click or a knock, shorter than a word.
-const MIN_VOICE_RUN: usize = 5;
+/// (90 ms): longer than a click or a knock, shorter than a syllable...
+const MIN_VOICE_RUN: usize = 3;
+
+/// ...or adds up to this many frames in all (240 ms): soft speech often comes
+/// through only in short bursts (one syllable at a time), so a quiet,
+/// trailing-off ending can have no long run at all.
+const MIN_VOICE_TOTAL: usize = 8;
+
+/// "Faint" is this many times the room's level: room hiss itself barely
+/// varies from frame to frame, so this is sound, however soft.
+const FAINT_RATIO: f32 = 1.8;
+
+/// A piece has faint sound worth transcribing when at least this many frames
+/// (60 ms) are faint.
+const MIN_FAINT_FRAMES: usize = 2;
+
+fn is_faint(faint: &[bool]) -> bool {
+    faint.iter().filter(|f| **f).count() >= MIN_FAINT_FRAMES
+}
 
 /// Normal speech anywhere, or quiet voice that lasts (a soft speaker or a
-/// microphone set low).
+/// microphone set low) or keeps coming back.
 fn contains_speech(speech: &[bool], voice: &[bool]) -> bool {
     if speech.iter().any(|s| *s) {
         return true;
     }
     let mut run = 0;
+    let mut total = 0;
     for v in voice {
         run = if *v { run + 1 } else { 0 };
-        if run >= MIN_VOICE_RUN {
+        total += *v as usize;
+        if run >= MIN_VOICE_RUN || total >= MIN_VOICE_TOTAL {
             return true;
         }
     }
@@ -162,12 +190,19 @@ pub struct Chunker {
     /// Quiet voice (trailing-off words) as well as normal speech. Used to
     /// find pauses and the end of speech, so quiet last words aren't cut.
     voice: Vec<bool>,
+    /// Any sound clearly above the room's hiss, even fainter than voice.
+    /// Only used to decide whether a piece without speech is worth a look
+    /// (`Chunk::weak_speech`).
+    faint: Vec<bool>,
     noise_floor: f32,
     /// Background level, tracked from the quietest frames.
     floor: f32,
     /// Room level measured right after the microphone opens.
     warmup_min: f32,
+    warmup_max: f32,
     warmup_frames: usize,
+    /// Voice frames in the whole recording so far.
+    voice_total: usize,
     next_index: usize,
     total_samples: usize,
     any_speech: bool,
@@ -182,10 +217,13 @@ impl Chunker {
             energies: Vec::new(),
             speech: Vec::new(),
             voice: Vec::new(),
+            faint: Vec::new(),
             noise_floor: 0.003,
             floor: 0.002,
             warmup_min: f32::MAX,
+            warmup_max: 0.0,
             warmup_frames: 0,
+            voice_total: 0,
             next_index: 0,
             total_samples: 0,
             any_speech: false,
@@ -223,16 +261,25 @@ impl Chunker {
     /// and outside speech rises slowly (about 18% a second), so a second or
     /// two of quiet talking can't raise it much.
     fn is_voice(&mut self, e: f32, speech: bool) -> bool {
-        // The first ~240 ms (before anyone talks after the chime) set the
-        // floor to the room's level, so a fan doesn't count as voice while
-        // the slow rise catches up. Digital silence while the mic starts is
-        // skipped.
+        // The first ~240 ms set the floor to the room's level, so a fan
+        // doesn't count as voice while the slow rise catches up. Only a
+        // steady sound is taken as the room: someone already talking (hold
+        // the key and speak at once) goes up and down from syllable to
+        // syllable, and taking that as the room would make their quieter
+        // words (often the last ones) count as silence. Digital silence
+        // while the mic starts is skipped.
         if self.warmup_frames < WARMUP_FRAMES && (e > 0.0002 || self.warmup_frames > 0) {
             self.warmup_frames += 1;
+            self.warmup_max = self.warmup_max.max(e);
             if !speech {
                 self.warmup_min = self.warmup_min.min(e);
             }
-            if self.warmup_frames == WARMUP_FRAMES && self.warmup_min != f32::MAX && self.warmup_min > self.floor {
+            let steady = self.warmup_max <= self.warmup_min * WARMUP_STEADY_RATIO;
+            if self.warmup_frames == WARMUP_FRAMES
+                && self.warmup_min != f32::MAX
+                && self.warmup_min > self.floor
+                && steady
+            {
                 self.floor = self.warmup_min;
             }
         }
@@ -259,7 +306,15 @@ impl Chunker {
             self.energies.push(e);
             self.speech.push(sp);
             self.voice.push(voice);
-            if sp || self.voice.iter().rev().take_while(|v| **v).count() >= MIN_VOICE_RUN {
+            self.faint
+                .push(self.warmup_frames >= WARMUP_FRAMES && e > (self.floor * FAINT_RATIO).max(0.0012));
+            if voice {
+                self.voice_total += 1;
+            }
+            if sp
+                || self.voice.iter().rev().take_while(|v| **v).count() >= MIN_VOICE_RUN
+                || self.voice_total >= MIN_VOICE_TOTAL
+            {
                 self.any_speech = true;
             }
             if let Some(c) = self.maybe_cut() {
@@ -309,16 +364,19 @@ impl Chunker {
         self.energies.drain(..n);
         self.speech.drain(..n);
         self.voice.drain(..n);
+        self.faint.drain(..n);
     }
 
     fn cut_at(&mut self, frame: usize) -> Chunk {
         let samples: Vec<f32> = self.buf[..frame * FRAME].to_vec();
         let has_speech = contains_speech(&self.speech[..frame], &self.voice[..frame]);
+        let weak_speech = !has_speech && self.any_speech && is_faint(&self.faint[..frame]);
         self.drain_frames(frame);
         let c = Chunk {
             index: self.next_index,
             samples,
             has_speech,
+            weak_speech,
             is_final: false,
         };
         self.next_index += 1;
@@ -334,7 +392,8 @@ impl Chunker {
         let keep_silence = 400 / FRAME_MS;
         let mut end = self.buf.len();
         let tail_speech = contains_speech(&self.speech, &self.voice);
-        if run > keep_silence && tail_speech {
+        let weak_speech = !tail_speech && self.any_speech && is_faint(&self.faint);
+        if run > keep_silence && (tail_speech || weak_speech) {
             end = (frames - run + keep_silence) * FRAME;
         }
         if end == 0 {
@@ -345,10 +404,12 @@ impl Chunker {
         self.energies.clear();
         self.speech.clear();
         self.voice.clear();
+        self.faint.clear();
         let c = Chunk {
             index: self.next_index,
             samples,
             has_speech: tail_speech,
+            weak_speech,
             is_final: true,
         };
         self.next_index += 1;
@@ -519,6 +580,32 @@ mod tests {
             assert!(!c.any_speech(), "amp {amp}");
             assert!(!c.finish().unwrap().has_speech, "amp {amp}");
         }
+    }
+
+    /// Talking from the first moment, then a pause cuts the recording, and
+    /// the end of the sentence comes back only as a few faint syllables
+    /// (Mandarin, softly). That last piece was thrown away as "no speech".
+    #[test]
+    fn faint_last_syllables_are_weak_speech_not_silence() {
+        let mut c = Chunker::new(ChunkerConfig::default());
+        let mut audio = tone(5_200, 0.3); // loud speech from the first frame
+        audio.extend(silence(400)); // a pause: the chunker cuts here
+        for _ in 0..2 {
+            audio.extend(tone(40, 0.012)); // one faint syllable (1-2 frames)
+            audio.extend(silence(240));
+        }
+        let cut = c.push(&audio);
+        assert_eq!(cut.len(), 1);
+        assert!(cut[0].has_speech);
+        let fin = c.finish().unwrap();
+        assert!(!fin.has_speech, "too faint for clear speech");
+        assert!(fin.weak_speech, "but not silence: worth transcribing");
+        // Pure silence after speech is neither.
+        let mut c = Chunker::new(ChunkerConfig::default());
+        c.push(&tone(5_200, 0.3));
+        c.push(&silence(1_500));
+        let fin = c.finish().unwrap();
+        assert!(!fin.has_speech && !fin.weak_speech);
     }
 
     #[test]

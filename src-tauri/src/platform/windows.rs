@@ -135,7 +135,19 @@ fn registered(name: &str) -> u32 {
     unsafe { RegisterClipboardFormatW(PCWSTR(w.as_ptr())) }
 }
 
+/// Puts text on the clipboard, kept out of clipboard history and cloud
+/// clipboard (diagnostics report, restored-clipboard pastes).
 pub fn clipboard_set_text(text: &str) -> Result<(), String> {
+    clipboard_put_text(text, true)
+}
+
+/// Puts text on the clipboard for the user to paste again: it shows in
+/// clipboard history (Win+V) but is never sent to cloud clipboard.
+pub fn clipboard_set_text_kept(text: &str) -> Result<(), String> {
+    clipboard_put_text(text, false)
+}
+
+fn clipboard_put_text(text: &str, private: bool) -> Result<(), String> {
     let _g = open_clipboard().ok_or("clipboard busy")?;
     let mut wide: Vec<u16> = text.encode_utf16().collect();
     wide.push(0);
@@ -143,10 +155,13 @@ pub fn clipboard_set_text(text: &str) -> Result<(), String> {
     unsafe {
         EmptyClipboard().map_err(|e| e.to_string())?;
         set_bytes(CF_UNICODETEXT, &bytes)?;
-        // Keep dictations out of clipboard history and cloud clipboard.
         let zero = 0u32.to_le_bytes();
-        let _ = set_bytes(registered("ExcludeClipboardContentFromMonitorProcessing"), &zero);
-        let _ = set_bytes(registered("CanIncludeInClipboardHistory"), &zero);
+        if private {
+            // Out of clipboard history and clipboard managers.
+            let _ = set_bytes(registered("ExcludeClipboardContentFromMonitorProcessing"), &zero);
+            let _ = set_bytes(registered("CanIncludeInClipboardHistory"), &zero);
+        }
+        // Never synced to other devices through cloud clipboard.
         let _ = set_bytes(registered("CanUploadToCloudClipboard"), &zero);
     }
     Ok(())

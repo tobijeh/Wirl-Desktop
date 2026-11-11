@@ -38,6 +38,9 @@ pub struct PasteReport {
 #[derive(Default)]
 pub struct SystemInsert {
     pub report: PasteReport,
+    /// The text stays on the clipboard after pasting (shown in clipboard
+    /// history so it can be pasted again).
+    pub keep: bool,
 }
 
 impl InsertPlatform for SystemInsert {
@@ -46,7 +49,11 @@ impl InsertPlatform for SystemInsert {
         clipboard_snapshot()
     }
     fn set_clipboard_text(&mut self, text: &str) -> Result<u64, String> {
-        clipboard_set_text(text)?;
+        if self.keep {
+            clipboard_set_text_kept(text)?;
+        } else {
+            clipboard_set_text(text)?;
+        }
         Ok(clipboard_sequence())
     }
     fn clipboard_sequence(&self) -> u64 {

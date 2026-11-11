@@ -73,7 +73,7 @@ pub fn get_state() -> Value {
     let mic_ok = !attention.contains(&"microphone");
     let icons = a.icons.read().clone();
     let diagnostics = if s.developer_options {
-        json!({ "entries": a.diag.lock().entries(), "sidecar": a.sidecar.status(), "dataFolder": a.paths.data })
+        json!({ "entries": a.diag.lock().entries(), "sidecar": a.sidecar.status(), "dataFolder": a.paths.data, "logFolder": a.paths.logs })
     } else {
         Value::Null
     };
@@ -634,6 +634,90 @@ pub fn reveal_developer_options() {
     a.settings.write().developer_options = true;
     a.save_settings();
     a.notify();
+}
+
+/// Copies a plain-text diagnostics report (settings summary, engine status,
+/// the last 20 attempts with their text and timings) to the clipboard, to
+/// paste into a message when asking for help. Never includes the API key.
+/// `tz_offset_min` is the page's `Date.getTimezoneOffset()`, for local times.
+#[tauri::command]
+pub async fn copy_diagnostics(tz_offset_min: i64) -> CmdResult<usize> {
+    let a = app::get().clone();
+    let s = a.settings();
+    let sc = a.sidecar.status();
+    let sync = cloud_sync::status();
+    let ticked: Vec<&str> = models::cycle::ticked_with_current(&s.quick_switch, s.model)
+        .into_iter()
+        .map(|m| models::info(m).name)
+        .collect();
+    let on_off = |b: bool| if b { "on" } else { "off" };
+    let header = vec![
+        format!("Version: {}", a.handle.package_info().version),
+        format!("System: {} {}", std::env::consts::OS, std::env::consts::ARCH),
+        format!(
+            "Speech model: {} ({})",
+            models::info(s.model).name,
+            if a.model_ready(s.model) {
+                "downloaded"
+            } else {
+                "not downloaded"
+            }
+        ),
+        format!("Quick switch: {}", ticked.join(", ")),
+        format!(
+            "Speech engine: {}{} · restarts: {}{}",
+            if sc.running { "running" } else { "stopped" },
+            if sc.gpu { " (GPU)" } else { " (CPU)" },
+            sc.restarts,
+            sc.last_error.map(|e| format!(" · last error: {e}")).unwrap_or_default()
+        ),
+        format!(
+            "AI cleanup: {} · API key: {}",
+            on_off(s.cleanup_enabled),
+            if a.api_key.read().is_some() { "saved" } else { "missing" }
+        ),
+        format!(
+            "Hotkeys: Dictate {} · Cancel {} · Clean up {} · Switch model {} · Hold to talk {}",
+            s.hotkeys.dictate,
+            s.hotkeys.cancel,
+            s.hotkeys.clean_selection,
+            s.hotkeys.switch_model,
+            on_off(s.hold_to_talk)
+        ),
+        format!(
+            "Needs attention: {}",
+            match a.attention_items() {
+                v if v.is_empty() => "nothing".to_string(),
+                v => v.join(", "),
+            }
+        ),
+        format!(
+            "Phone sync: {}{}",
+            if sync.active { "on" } else { "not set up" },
+            sync.error.map(|e| format!(" · {e}")).unwrap_or_default()
+        ),
+        format!("Log folder: {}", a.paths.logs.display()),
+    ];
+    let entries = a.diag.lock().entries();
+    let time = |ms: i64| {
+        let local = ms / 1000 - tz_offset_min * 60;
+        let secs = local.rem_euclid(86_400);
+        format!("{:02}:{:02}:{:02}", secs / 3600, secs % 3600 / 60, secs % 60)
+    };
+    let text = wirl_core::diagnostics::report(&header, &entries, time);
+    let n = entries.len();
+    tauri::async_runtime::spawn_blocking(move || crate::platform::clipboard_set_text(&text))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("Couldn't copy the report: {e}"))?;
+    Ok(n)
+}
+
+/// Opens the folder with Wirl's log file (wirl.log).
+#[tauri::command]
+pub fn open_log_folder() -> CmdResult<()> {
+    let a = app::get();
+    crate::platform::open_folder(&a.paths.logs)
 }
 
 #[tauri::command]

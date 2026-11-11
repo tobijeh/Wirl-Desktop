@@ -345,6 +345,7 @@ async fn run_session(
         end_session(&a, session);
         return;
     };
+    diag.heard = Some(raw.clone());
 
     // Claude cleanup (or raw text if cleanup is off).
     let cleanup = if s.cleanup_enabled {
@@ -378,6 +379,8 @@ async fn run_session(
             Ok(c) => {
                 diag.push_stage("Claude first byte", c.first_byte_ms);
                 diag.push_stage("Claude total", c.total_ms);
+                diag.cleaned = Some(c.text.clone());
+                diag.connection = Some(connection_label(c.warm_connection));
                 diag.model = Some(format!(
                     "{} + {}",
                     diag.model.clone().unwrap_or_default(),
@@ -403,11 +406,13 @@ async fn run_session(
             pill::set(PillState::Hidden);
         }
         Final::Insert { text, warning } => {
+            diag.inserted = Some(text.clone());
             let t = Instant::now();
             let outcome = tauri::async_runtime::spawn_blocking(move || insert_text(&mut SystemInsert, &text))
                 .await
                 .unwrap_or_else(|e| InsertOutcome::Failed(e.to_string()));
             diag.push_stage("Insert", t.elapsed().as_millis() as u64);
+            diag.push_stage("Stop to insert", stop_at.elapsed().as_millis() as u64);
             report_insert(&mut diag, &outcome);
             let pasted = matches!(outcome, InsertOutcome::Pasted { .. });
             let tip = pasted && record_dictation(&a);
@@ -446,6 +451,15 @@ fn record_cleanup(a: &App) {
     a.settings.write().usage.record_cleanup();
     a.save_settings();
     a.notify();
+}
+
+/// Diagnostics wording for whether Claude's connection was already open.
+fn connection_label(warm: bool) -> String {
+    if warm {
+        "warm (already open)".into()
+    } else {
+        "new (opened for this request)".into()
+    }
 }
 
 fn report_insert(diag: &mut DiagEntry, outcome: &InsertOutcome) {
@@ -604,6 +618,7 @@ async fn clean_selection(a: Arc<App>, session: u64) {
             let entries: Vec<&_> = entries_owned.iter().collect();
             diag.thinking = Some(false);
             diag.model = Some(CLEANUP_MODEL.into());
+            diag.heard = Some(original.clone());
             let r = a
                 .claude
                 .cleanup(
@@ -622,6 +637,9 @@ async fn clean_selection(a: Arc<App>, session: u64) {
                 Ok(c) if !c.text.trim().is_empty() => {
                     diag.push_stage("Claude first byte", c.first_byte_ms);
                     diag.push_stage("Claude total", c.total_ms);
+                    diag.connection = Some(connection_label(c.warm_connection));
+                    diag.cleaned = Some(c.text.clone());
+                    diag.inserted = Some(c.text.clone());
                     let cleaned = c.text.clone();
                     let t = Instant::now();
                     let outcome = paste(cleaned.clone()).await;

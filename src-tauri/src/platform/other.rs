@@ -60,3 +60,13 @@ pub fn resume_media(_t: MediaPauseToken) {}
 pub fn microphone_allowed() -> bool {
     true
 }
+
+/// Opens a folder in the file manager.
+pub fn open_folder(path: &std::path::Path) -> Result<(), String> {
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    std::process::Command::new(opener)
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}

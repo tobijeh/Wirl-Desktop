@@ -39,6 +39,14 @@ pub fn has_words(spoken: &str) -> bool {
     spoken.chars().filter(|c| c.is_alphabetic()).count() >= MIN_LETTERS
 }
 
+/// The text of a piece with only faint speech (`Chunk::weak_speech`), kept
+/// only if it reads as real words: not a made-up phrase or sound tag on its
+/// own (`filter_transcript`), and at least [`MIN_LETTERS`] letters.
+pub fn weak_chunk_text(text: &str) -> Option<String> {
+    let t = filter_transcript(text);
+    has_words(&t).then_some(t)
+}
+
 /// Replies longer than this are real text, even if they mention silence.
 const MAX_REMARK_WORDS: usize = 12;
 
@@ -149,6 +157,26 @@ mod tests {
             }
         );
         assert_eq!(after_cleanup("raw", Some(Ok("  ".into()))), Final::Discard);
+    }
+
+    #[test]
+    fn faint_pieces_keep_only_real_words() {
+        assert_eq!(weak_chunk_text("很喜欢").as_deref(), Some("很喜欢"));
+        assert_eq!(
+            weak_chunk_text(" and the client loved it ").as_deref(),
+            Some("and the client loved it")
+        );
+        for noise in [
+            "",
+            "嗯",
+            ".",
+            "you",
+            "[BLANK_AUDIO]",
+            "(clicking)",
+            "Thanks for watching!",
+        ] {
+            assert_eq!(weak_chunk_text(noise), None, "{noise}");
+        }
     }
 
     #[test]

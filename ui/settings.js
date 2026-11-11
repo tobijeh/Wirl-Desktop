@@ -248,6 +248,14 @@ function pageDictation() {
       <div class="grow"><h3>Pause media while dictating</h3><div class="muted">Music and videos pause while you talk and resume after.</div></div>
       ${switchHtml("pauseMedia", s.pauseMedia)}
     </div>
+    <div class="card row">
+      <div class="grow"><h3>Keep what you dictate on the clipboard</h3><div class="muted">${
+        s.keepOnClipboard
+          ? "If the text doesn't appear, press Ctrl+V to paste it again. It's also in your clipboard history (Win+V)."
+          : "Off: whatever you had copied before is put back after pasting."
+      }</div></div>
+      ${switchHtml("keepOnClipboard", s.keepOnClipboard)}
+    </div>
   </div>`;
 }
 

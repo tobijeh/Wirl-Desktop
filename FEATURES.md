@@ -11,14 +11,14 @@ Status per platform.
 | | Vulkan GPU with automatic CPU fallback | 🟢 | ⬜ |
 | | Sidecar crash/OOM isolation, auto-restart, reason logged | 🟢 | ⬜ |
 | | Background chunking at natural pauses (5–10 s) | ✅ | ❔ |
-| | Quiet voices and trailing-off last words kept (room-relative voice detection) | ✅ | ❔ |
+| | Quiet voices and trailing-off last words kept (room-relative voice detection, steady-room check when talking from the first moment, faint last pieces transcribed and kept only if they're real words) | ✅ | ❔ |
 | | Final chunk starts the instant recording stops | 🟢 | ❔ |
 | | `audio_ctx` sized per chunk (min 384) | ✅ | ❔ |
 | | Dictionary terms as Whisper initial prompt | ✅ | ❔ |
 | | Sound-tag and lone-hallucination filtering | ✅ | ❔ |
 | | Silent discard (< 1 s or no speech) | ✅ | ❔ |
 | | Nothing inserted without words: fewer than 3 letters isn't sent to Claude; a reply that's only punctuation or a remark about the recording is dropped | ✅ | ✅ |
-| | Insert at cursor via clipboard paste, clipboard restored | ✅ logic / 🟢 Windows | ❔ |
+| | Insert at cursor via clipboard paste; by default the text stays on the clipboard and in Win+V history so a missed paste can be repeated (switch to restore the old clipboard instead) | ✅ logic / 🟢 Windows | ❔ |
 | | "Copied, press Ctrl+V" fallback when paste is blocked | ✅ logic / 🟢 Windows | ❔ |
 | | Pause media during dictation (Windows media controls) | 🟢 | ❔ |
 | | Start/stop chime | 🟢 | ❔ |

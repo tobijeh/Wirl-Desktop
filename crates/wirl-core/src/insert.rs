@@ -54,8 +54,27 @@ pub fn to_platform_newlines(text: &str) -> String {
     }
 }
 
+/// What happens to the clipboard after the paste.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfterPaste {
+    /// Put the previous clipboard back (after [`RESTORE_DELAY`]).
+    Restore,
+    /// Leave the pasted text on the clipboard, so a paste that didn't land
+    /// can be repeated with Ctrl+V.
+    Keep,
+}
+
+/// Inserts `text` and puts the previous clipboard back.
 pub fn insert_text<P: InsertPlatform>(p: &mut P, text: &str) -> InsertOutcome {
-    let snapshot = p.snapshot_clipboard();
+    insert_text_then(p, text, AfterPaste::Restore)
+}
+
+/// Inserts `text`, then restores the clipboard or keeps the text on it.
+pub fn insert_text_then<P: InsertPlatform>(p: &mut P, text: &str, after: AfterPaste) -> InsertOutcome {
+    let snapshot = match after {
+        AfterPaste::Restore => p.snapshot_clipboard(),
+        AfterPaste::Keep => None,
+    };
     let seq = match p.set_clipboard_text(&to_platform_newlines(text)) {
         Ok(s) => s,
         Err(e) => return InsertOutcome::Failed(e),
@@ -65,6 +84,9 @@ pub fn insert_text<P: InsertPlatform>(p: &mut P, text: &str) -> InsertOutcome {
     }
     if let Err(reason) = p.send_paste() {
         return InsertOutcome::CopiedOnly { reason };
+    }
+    if after == AfterPaste::Keep {
+        return InsertOutcome::Pasted { restored: false };
     }
     p.sleep(RESTORE_DELAY);
     let mut restored = false;
@@ -248,6 +270,19 @@ mod tests {
         assert_eq!(insert_text(&mut m, text), InsertOutcome::Pasted { restored: true });
         assert_eq!(m.pasted, vec![text]);
         assert_eq!(m.clipboard.as_deref(), Some("old"));
+    }
+
+    #[test]
+    fn keep_leaves_the_text_on_the_clipboard() {
+        let mut m = Mock {
+            clipboard: Some("old".into()),
+            ..Default::default()
+        };
+        let out = insert_text_then(&mut m, "dictated", AfterPaste::Keep);
+        assert_eq!(out, InsertOutcome::Pasted { restored: false });
+        assert_eq!(m.pasted, vec!["dictated"]);
+        // Still there to paste again with Ctrl+V if the paste didn't land.
+        assert_eq!(m.clipboard.as_deref(), Some("dictated"));
     }
 
     #[test]

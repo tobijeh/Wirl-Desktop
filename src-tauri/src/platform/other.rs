@@ -11,6 +11,9 @@ pub struct ClipboardSnapshot;
 pub fn clipboard_snapshot() -> Option<ClipboardSnapshot> {
     None
 }
+pub fn clipboard_set_text_kept(text: &str) -> Result<(), String> {
+    clipboard_set_text(text)
+}
 pub fn clipboard_set_text(_text: &str) -> Result<(), String> {
     Err("Clipboard is only implemented on Windows".into())
 }

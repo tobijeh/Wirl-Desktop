@@ -13,7 +13,7 @@ use wirl_core::audio::{assemble, audio_ctx_for, Chunk, Chunker, ChunkerConfig};
 use wirl_core::claude::CleanupError;
 use wirl_core::diagnostics::{DiagEntry, DiagKind};
 use wirl_core::hotkey::TriggerOutput;
-use wirl_core::insert::{insert_text, CleanDecision, InsertOutcome, PasteError};
+use wirl_core::insert::{insert_text_then, AfterPaste, CleanDecision, InsertOutcome, PasteError};
 use wirl_core::ipc::initial_prompt;
 use wirl_core::models::{self, Engine};
 use wirl_core::pill::PillState;
@@ -199,6 +199,12 @@ struct ChunkResult {
     text: String,
     ms: u64,
     error: Option<String>,
+    /// Length of the piece, for Diagnostics.
+    dur_ms: usize,
+    /// Not transcribed: no speech or voice at all in it.
+    skipped: bool,
+    /// Only faint speech: transcribed, text kept only if it's real words.
+    faint: bool,
 }
 
 async fn transcribe_worker(
@@ -209,9 +215,20 @@ async fn transcribe_worker(
 ) -> Vec<ChunkResult> {
     let mut out = Vec::new();
     while let Some(chunk) = rx.recv().await {
-        if !chunk.has_speech {
+        let dur_ms = chunk.duration_ms();
+        if !chunk.has_speech && !chunk.weak_speech {
+            out.push(ChunkResult {
+                index: chunk.index,
+                text: String::new(),
+                ms: 0,
+                error: None,
+                dur_ms,
+                skipped: true,
+                faint: false,
+            });
             continue;
         }
+        let faint = !chunk.has_speech;
         let ctx = audio_ctx_for(chunk.samples.len());
         let timeout = Duration::from_millis(pipeline::CHUNK_TRANSCRIBE_TIMEOUT_MS);
         match a
@@ -221,15 +238,26 @@ async fn transcribe_worker(
         {
             Ok((text, ms)) => out.push(ChunkResult {
                 index: chunk.index,
-                text,
+                // A faint piece keeps its text only if it's real words.
+                text: if faint {
+                    pipeline::weak_chunk_text(&text).unwrap_or_default()
+                } else {
+                    text
+                },
                 ms,
                 error: None,
+                dur_ms,
+                skipped: false,
+                faint,
             }),
             Err(e) => out.push(ChunkResult {
                 index: chunk.index,
                 text: String::new(),
                 ms: 0,
                 error: Some(e),
+                dur_ms,
+                skipped: false,
+                faint,
             }),
         }
     }
@@ -339,10 +367,25 @@ async fn run_session(
         Engine::SenseVoice => "SenseVoice",
     };
     diag.model = Some(model.name.to_string());
-    for r in &results {
+    for r in results.iter().filter(|r| !r.skipped) {
         diag.push_stage(format!("{engine_name} chunk {}", r.index + 1), r.ms);
     }
     diag.push_stage(format!("{engine_name} after stop"), tail_ms);
+    // What happened to each piece that wasn't plain speech, so lost words
+    // show up in Diagnostics instead of only as a missing chunk number.
+    for r in &results {
+        let piece = format!("Piece {} ({:.1} s)", r.index + 1, r.dur_ms as f64 / 1000.0);
+        if let Some(e) = &r.error {
+            diag.notes
+                .push(format!("{piece}: couldn't be transcribed ({e}); its words are missing"));
+        } else if r.skipped {
+            diag.notes.push(format!("{piece}: no speech, skipped"));
+        } else if r.faint && r.text.is_empty() {
+            diag.notes.push(format!("{piece}: only faint sound, no words in it"));
+        } else if r.faint {
+            diag.notes.push(format!("{piece}: faint speech, kept: {}", r.text));
+        }
+    }
     let errors: Vec<String> = results.iter().filter_map(|r| r.error.clone()).collect();
     let parts: Vec<(usize, String)> = results.iter().map(|r| (r.index, r.text.clone())).collect();
     let joined = assemble(&parts);
@@ -486,10 +529,17 @@ fn record_cleanup(a: &App) {
 }
 
 /// Pastes `text` and reports what was around the paste (for Diagnostics).
+/// With "Keep what you dictate on the clipboard" on (default), the text
+/// stays on the clipboard so a paste that didn't land can be repeated.
 async fn paste_with_report(text: String) -> (InsertOutcome, PasteReport) {
+    let keep = app::get().settings().keep_on_clipboard;
     tauri::async_runtime::spawn_blocking(move || {
-        let mut p = SystemInsert::default();
-        let outcome = insert_text(&mut p, &text);
+        let mut p = SystemInsert {
+            keep,
+            ..Default::default()
+        };
+        let after = if keep { AfterPaste::Keep } else { AfterPaste::Restore };
+        let outcome = insert_text_then(&mut p, &text, after);
         p.report.other_apps = platform::running_dictation_apps();
         (outcome, p.report)
     })
@@ -546,6 +596,9 @@ fn connection_label(warm: bool) -> String {
 fn report_insert(diag: &mut DiagEntry, outcome: &InsertOutcome) {
     diag.insert_method = Some(match outcome {
         InsertOutcome::Pasted { restored: true } => "Clipboard paste (clipboard restored)".into(),
+        InsertOutcome::Pasted { restored: false } if app::get().settings().keep_on_clipboard => {
+            "Clipboard paste (text kept on the clipboard)".into()
+        }
         InsertOutcome::Pasted { restored: false } => "Clipboard paste".into(),
         InsertOutcome::CopiedOnly {
             reason: PasteError::Blocked,

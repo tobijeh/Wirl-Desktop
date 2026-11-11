@@ -84,6 +84,10 @@ pub struct Settings {
     /// counts as ticked (see `models::cycle`).
     pub quick_switch: Vec<ModelId>,
     pub pause_media: bool,
+    /// Leave what was just pasted on the clipboard (and in clipboard
+    /// history), so a paste that didn't land can be repeated with Ctrl+V.
+    /// Off: the previous clipboard is put back after pasting.
+    pub keep_on_clipboard: bool,
 
     // AI cleanup
     pub cleanup_enabled: bool,
@@ -118,6 +122,7 @@ impl Default for Settings {
             version: SETTINGS_VERSION,
             model: ModelId::Fast,
             quick_switch: Vec::new(),
+            keep_on_clipboard: true,
             pause_media: true,
             cleanup_enabled: true,
             style_notes: String::new(),
@@ -207,6 +212,7 @@ mod tests {
         assert_eq!(s.hotkeys.clean_selection.to_string(), "Ctrl+Alt+C");
         assert_eq!(s.hotkeys.switch_model.to_string(), "Ctrl+Alt+M");
         assert!(s.quick_switch.is_empty());
+        assert!(s.keep_on_clipboard);
         assert_eq!(s.pill_position, PillPosition::BottomCenter);
     }
 

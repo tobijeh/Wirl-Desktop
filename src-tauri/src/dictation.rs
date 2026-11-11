@@ -472,6 +472,14 @@ async fn run_session(
     if !a.session_is(session) {
         return;
     }
+    if let Some(Ok(t)) = &cleanup {
+        if pipeline::is_reply_to_speaker(&raw, t) {
+            diag.notes.push(
+                "Claude answered instead of cleaning up (what you said sounded like a request), so your own words were inserted."
+                    .into(),
+            );
+        }
+    }
     match pipeline::after_cleanup(&raw, cleanup) {
         Final::Discard => {
             diag.summary = format!("{} · nothing inserted", diag.summary);
@@ -801,6 +809,14 @@ async fn clean_selection(a: Arc<App>, session: u64) {
                 return;
             }
             match r {
+                Ok(c) if pipeline::is_reply_to_speaker(&original, &c.text) => {
+                    diag.cleaned = Some(c.text.clone());
+                    diag.notes.push(
+                        "Claude answered instead of cleaning up (the text sounded like a request), so the selection was left as it was."
+                            .into(),
+                    );
+                    show_error("Couldn't clean this up");
+                }
                 Ok(c) if !c.text.trim().is_empty() => {
                     diag.push_stage("Claude first byte", c.first_byte_ms);
                     diag.push_stage("Claude total", c.total_ms);

@@ -20,6 +20,7 @@ Status per platform.
 | | Nothing inserted without words: fewer than 3 letters isn't sent to Claude; a reply that's only punctuation or a remark about the recording is dropped | ✅ | ✅ |
 | | Insert at cursor via clipboard paste; by default the text stays on the clipboard and in Win+V history so a missed paste can be repeated (switch to restore the old clipboard instead) | ✅ logic / 🟢 Windows | ❔ |
 | | Paste that lands: waits for a busy clipboard, types Ctrl+V like a person, checks the text box (UI Automation) and tries once more; if it still didn't land, says "Copied, press Ctrl+V" | ✅ logic / 🟢 Windows | ❔ |
+| | If Claude answers what you said instead of cleaning it up (you dictated a request), your own words are inserted instead; Clean up selection leaves the text as it was | ✅ logic / 🟢 Windows | 🔵 |
 | | "Copied, press Ctrl+V" fallback when paste is blocked | ✅ logic / 🟢 Windows | ❔ |
 | | Pause media during dictation (Windows media controls) | 🟢 | ❔ |
 | | Start/stop chime | 🟢 | ❔ |

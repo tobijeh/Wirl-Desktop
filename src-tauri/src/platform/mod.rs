@@ -32,6 +32,10 @@ pub struct PasteReport {
     pub keys_held: Vec<&'static str>,
     /// Other dictation apps running at the time.
     pub other_apps: Vec<String>,
+    /// A program seen holding the clipboard right before Ctrl+V.
+    pub clipboard_held_by: Option<String>,
+    /// Whether the text box could be read to check the paste.
+    pub checkable: bool,
 }
 
 /// The real insert platform used by `wirl_core::insert::insert_text`.
@@ -41,7 +45,20 @@ pub struct SystemInsert {
     /// The text stays on the clipboard after pasting (shown in clipboard
     /// history so it can be pasted again).
     pub keep: bool,
+    probe: Option<TextBoxProbe>,
 }
+
+impl SystemInsert {
+    pub fn new(keep: bool) -> Self {
+        SystemInsert {
+            keep,
+            ..Default::default()
+        }
+    }
+}
+
+/// How long a paste may take to show up in the text box.
+const LAND_WAIT: Duration = Duration::from_millis(1_000);
 
 impl InsertPlatform for SystemInsert {
     type Snapshot = ClipboardSnapshot;
@@ -74,6 +91,18 @@ impl InsertPlatform for SystemInsert {
     }
     fn sleep(&mut self, d: Duration) {
         std::thread::sleep(d);
+    }
+    fn settle(&mut self) {
+        self.report.clipboard_held_by =
+            wait_clipboard_free(wirl_core::insert::PASTE_SETTLE, Duration::from_millis(300));
+    }
+    fn begin_check(&mut self) {
+        self.probe = probe_text_box();
+        self.report.checkable = self.probe.is_some();
+    }
+    fn text_box_changed(&mut self) -> Option<bool> {
+        let probe = self.probe.as_ref()?;
+        text_box_changed(probe, LAND_WAIT)
     }
 }
 

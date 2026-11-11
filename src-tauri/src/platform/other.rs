@@ -35,6 +35,17 @@ pub fn send_ctrl_key(_key: char) -> Result<(), PasteError> {
 pub fn wait_modifiers_released(_timeout: Duration) -> bool {
     true
 }
+pub struct TextBoxProbe;
+pub fn probe_text_box() -> Option<TextBoxProbe> {
+    None
+}
+pub fn text_box_changed(_probe: &TextBoxProbe, _wait: Duration) -> Option<bool> {
+    None
+}
+pub fn wait_clipboard_free(min: Duration, _max: Duration) -> Option<String> {
+    std::thread::sleep(min);
+    None
+}
 pub fn held_modifiers() -> Vec<&'static str> {
     Vec::new()
 }

@@ -13,7 +13,7 @@ use wirl_core::audio::{assemble, audio_ctx_for, Chunk, Chunker, ChunkerConfig};
 use wirl_core::claude::CleanupError;
 use wirl_core::diagnostics::{DiagEntry, DiagKind};
 use wirl_core::hotkey::TriggerOutput;
-use wirl_core::insert::{insert_text_then, AfterPaste, CleanDecision, InsertOutcome, PasteError};
+use wirl_core::insert::{insert_text_then, AfterPaste, CleanDecision, InsertOutcome, PasteCheck, PasteError};
 use wirl_core::ipc::initial_prompt;
 use wirl_core::models::{self, Engine};
 use wirl_core::pill::PillState;
@@ -487,7 +487,7 @@ async fn run_session(
             let (outcome, report) = paste_with_report(text).await;
             diag.push_stage("Insert", t.elapsed().as_millis() as u64);
             diag.push_stage("Stop to insert", stop_at.elapsed().as_millis() as u64);
-            add_paste_notes(&mut diag, target.as_ref(), &report);
+            add_paste_notes(&mut diag, target.as_ref(), &report, &outcome);
             report_insert(&mut diag, &outcome);
             let pasted = matches!(outcome, InsertOutcome::Pasted { .. });
             let tip = pasted && record_dictation(&a);
@@ -534,10 +534,7 @@ fn record_cleanup(a: &App) {
 async fn paste_with_report(text: String) -> (InsertOutcome, PasteReport) {
     let keep = app::get().settings().keep_on_clipboard;
     tauri::async_runtime::spawn_blocking(move || {
-        let mut p = SystemInsert {
-            keep,
-            ..Default::default()
-        };
+        let mut p = SystemInsert::new(keep);
         let after = if keep { AfterPaste::Keep } else { AfterPaste::Restore };
         let outcome = insert_text_then(&mut p, &text, after);
         p.report.other_apps = platform::running_dictation_apps();
@@ -550,7 +547,12 @@ async fn paste_with_report(text: String) -> (InsertOutcome, PasteReport) {
 /// Diagnostics notes for one paste: how much was pasted, into which app
 /// (and whether it's the app the dictation started in), keys still held,
 /// and other dictation apps running. Program names only, never window titles.
-fn add_paste_notes(diag: &mut DiagEntry, started_in: Option<&platform::AppInfo>, report: &PasteReport) {
+fn add_paste_notes(
+    diag: &mut DiagEntry,
+    started_in: Option<&platform::AppInfo>,
+    report: &PasteReport,
+    outcome: &InsertOutcome,
+) {
     if let Some(text) = &diag.inserted {
         let chars = text.chars().count();
         let visible = text.chars().filter(|c| c.is_alphanumeric()).count();
@@ -582,6 +584,36 @@ fn add_paste_notes(diag: &mut DiagEntry, started_in: Option<&platform::AppInfo>,
             report.other_apps.join(", ")
         ));
     }
+    if let Some(p) = &report.clipboard_held_by {
+        diag.notes
+            .push(format!("The clipboard was busy ({p} had it open), so Wirl waited"));
+    }
+    if let Some(n) = check_note(outcome, report.checkable) {
+        diag.notes.push(n.into());
+    }
+}
+
+/// What the check of the text box found, in plain words.
+fn check_note(outcome: &InsertOutcome, checkable: bool) -> Option<&'static str> {
+    Some(match outcome {
+        InsertOutcome::Pasted {
+            check: PasteCheck::Landed,
+            ..
+        } => "Checked the text box: the text appeared",
+        InsertOutcome::Pasted {
+            check: PasteCheck::LandedOnRetry,
+            ..
+        } => "Checked the text box: the first Ctrl+V didn't land, the second one did",
+        InsertOutcome::Pasted {
+            check: PasteCheck::Unchecked,
+            ..
+        } if checkable => "Couldn't confirm the text appeared (the focus moved or the box stopped answering)",
+        InsertOutcome::Pasted { .. } => "This app's text box can't be read, so the paste wasn't checked",
+        InsertOutcome::CopiedOnly {
+            reason: PasteError::NotLanded,
+        } => "Checked the text box: nothing appeared after two Ctrl+V, so the text was left on the clipboard",
+        _ => return None,
+    })
 }
 
 /// Diagnostics wording for whether Claude's connection was already open.
@@ -595,14 +627,17 @@ fn connection_label(warm: bool) -> String {
 
 fn report_insert(diag: &mut DiagEntry, outcome: &InsertOutcome) {
     diag.insert_method = Some(match outcome {
-        InsertOutcome::Pasted { restored: true } => "Clipboard paste (clipboard restored)".into(),
-        InsertOutcome::Pasted { restored: false } if app::get().settings().keep_on_clipboard => {
+        InsertOutcome::Pasted { restored: true, .. } => "Clipboard paste (clipboard restored)".into(),
+        InsertOutcome::Pasted { restored: false, .. } if app::get().settings().keep_on_clipboard => {
             "Clipboard paste (text kept on the clipboard)".into()
         }
-        InsertOutcome::Pasted { restored: false } => "Clipboard paste".into(),
+        InsertOutcome::Pasted { restored: false, .. } => "Clipboard paste".into(),
         InsertOutcome::CopiedOnly {
             reason: PasteError::Blocked,
         } => "Copied only (paste blocked)".into(),
+        InsertOutcome::CopiedOnly {
+            reason: PasteError::NotLanded,
+        } => "Copied only (the paste didn't land)".into(),
         InsertOutcome::CopiedOnly { reason } => format!("Copied only ({reason:?})"),
         InsertOutcome::Failed(e) => format!("Failed: {e}"),
     });
@@ -776,7 +811,7 @@ async fn clean_selection(a: Arc<App>, session: u64) {
                     let t = Instant::now();
                     let (outcome, report) = paste_with_report(cleaned.clone()).await;
                     diag.push_stage("Insert", t.elapsed().as_millis() as u64);
-                    add_paste_notes(&mut diag, None, &report);
+                    add_paste_notes(&mut diag, None, &report, &outcome);
                     report_insert(&mut diag, &outcome);
                     match outcome {
                         InsertOutcome::Pasted { .. } => {

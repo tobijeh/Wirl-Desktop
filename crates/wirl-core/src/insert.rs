@@ -12,6 +12,8 @@ pub enum PasteError {
     NoTarget,
     /// SendInput or similar failed.
     Failed(String),
+    /// Ctrl+V was sent (twice) but the text box didn't change.
+    NotLanded,
 }
 
 /// Platform hooks used by [`insert_text`].
@@ -29,12 +31,41 @@ pub trait InsertPlatform {
     /// Sends Ctrl+V to the focused window.
     fn send_paste(&mut self) -> Result<(), PasteError>;
     fn sleep(&mut self, d: Duration);
+    /// Gives other programs that look at every clipboard change (clipboard
+    /// history, chat apps) a moment to let go of it before the target app
+    /// tries to read it. Only one program can hold the clipboard at a time.
+    fn settle(&mut self) {
+        self.sleep(PASTE_SETTLE);
+    }
+    /// Remembers what's in the focused text box before pasting, if it can
+    /// be read.
+    fn begin_check(&mut self) {}
+    /// After a paste: Some(true) if the focused text box changed, Some(false)
+    /// if it's exactly as before (waiting up to about a second), None if it
+    /// can't be read (some apps, password boxes, focus moved).
+    fn text_box_changed(&mut self) -> Option<bool> {
+        None
+    }
+}
+
+/// Pause between putting the text on the clipboard and pressing Ctrl+V.
+pub const PASTE_SETTLE: Duration = Duration::from_millis(60);
+
+/// Whether the paste was seen arriving in the text box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasteCheck {
+    /// The text box can't be read here (some apps), so it wasn't checked.
+    Unchecked,
+    /// The text box changed after Ctrl+V.
+    Landed,
+    /// Nothing changed after the first Ctrl+V; the second one worked.
+    LandedOnRetry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InsertOutcome {
     /// Pasted; the previous clipboard was restored (or there was none).
-    Pasted { restored: bool },
+    Pasted { restored: bool, check: PasteCheck },
     /// Could not paste; the text is left on the clipboard.
     CopiedOnly { reason: PasteError },
     /// Could not even set the clipboard.
@@ -79,14 +110,36 @@ pub fn insert_text_then<P: InsertPlatform>(p: &mut P, text: &str, after: AfterPa
         Ok(s) => s,
         Err(e) => return InsertOutcome::Failed(e),
     };
+    p.settle();
     if let Err(reason) = p.can_paste() {
         return InsertOutcome::CopiedOnly { reason };
     }
+    p.begin_check();
     if let Err(reason) = p.send_paste() {
         return InsertOutcome::CopiedOnly { reason };
     }
+    // Did it land? Only an unchanged text box counts as a miss, so a paste
+    // that did land (even reformatted by the app) is never pasted twice.
+    let check = match p.text_box_changed() {
+        None => PasteCheck::Unchecked,
+        Some(true) => PasteCheck::Landed,
+        Some(false) => {
+            if let Err(reason) = p.send_paste() {
+                return InsertOutcome::CopiedOnly { reason };
+            }
+            match p.text_box_changed() {
+                Some(false) => {
+                    // Leave the text on the clipboard: "Copied, press Ctrl+V".
+                    return InsertOutcome::CopiedOnly {
+                        reason: PasteError::NotLanded,
+                    };
+                }
+                _ => PasteCheck::LandedOnRetry,
+            }
+        }
+    };
     if after == AfterPaste::Keep {
-        return InsertOutcome::Pasted { restored: false };
+        return InsertOutcome::Pasted { restored: false, check };
     }
     p.sleep(RESTORE_DELAY);
     let mut restored = false;
@@ -96,7 +149,7 @@ pub fn insert_text_then<P: InsertPlatform>(p: &mut P, text: &str, after: AfterPa
             restored = p.restore_clipboard(snap).is_ok();
         }
     }
-    InsertOutcome::Pasted { restored }
+    InsertOutcome::Pasted { restored, check }
 }
 
 // ---------- clean-selection undo ----------
@@ -205,6 +258,8 @@ mod tests {
         send_fails: bool,
         pasted: Vec<String>,
         external_write_during_sleep: bool,
+        /// Scripted answers to `text_box_changed`, in order (None after).
+        checks: Vec<Option<bool>>,
     }
 
     impl InsertPlatform for Mock {
@@ -245,6 +300,14 @@ mod tests {
                 self.seq += 1;
             }
         }
+        fn settle(&mut self) {}
+        fn text_box_changed(&mut self) -> Option<bool> {
+            if self.checks.is_empty() {
+                None
+            } else {
+                self.checks.remove(0)
+            }
+        }
     }
 
     #[test]
@@ -254,7 +317,13 @@ mod tests {
             ..Default::default()
         };
         let out = insert_text(&mut m, "hello");
-        assert_eq!(out, InsertOutcome::Pasted { restored: true });
+        assert_eq!(
+            out,
+            InsertOutcome::Pasted {
+                restored: true,
+                check: PasteCheck::Unchecked
+            }
+        );
         assert_eq!(m.pasted, vec!["hello"]);
         assert_eq!(m.clipboard.as_deref(), Some("old"));
     }
@@ -267,9 +336,68 @@ mod tests {
             ..Default::default()
         };
         let text = "我今日下晝有個 meeting，之後要 send 個 email 俾老闆㗎。";
-        assert_eq!(insert_text(&mut m, text), InsertOutcome::Pasted { restored: true });
+        assert_eq!(
+            insert_text(&mut m, text),
+            InsertOutcome::Pasted {
+                restored: true,
+                check: PasteCheck::Unchecked
+            }
+        );
         assert_eq!(m.pasted, vec![text]);
         assert_eq!(m.clipboard.as_deref(), Some("old"));
+    }
+
+    #[test]
+    fn checked_paste_that_landed_is_pasted_once() {
+        let mut m = Mock {
+            checks: vec![Some(true)],
+            ..Default::default()
+        };
+        let out = insert_text_then(&mut m, "hi", AfterPaste::Keep);
+        assert_eq!(
+            out,
+            InsertOutcome::Pasted {
+                restored: false,
+                check: PasteCheck::Landed
+            }
+        );
+        assert_eq!(m.pasted.len(), 1);
+    }
+
+    #[test]
+    fn missed_paste_is_tried_once_more() {
+        let mut m = Mock {
+            checks: vec![Some(false), Some(true)],
+            ..Default::default()
+        };
+        let out = insert_text_then(&mut m, "hi", AfterPaste::Keep);
+        assert_eq!(
+            out,
+            InsertOutcome::Pasted {
+                restored: false,
+                check: PasteCheck::LandedOnRetry
+            }
+        );
+        assert_eq!(m.pasted.len(), 2);
+    }
+
+    #[test]
+    fn paste_that_never_lands_says_copied_and_keeps_the_text() {
+        let mut m = Mock {
+            clipboard: Some("old".into()),
+            checks: vec![Some(false), Some(false)],
+            ..Default::default()
+        };
+        let out = insert_text(&mut m, "dictated");
+        assert_eq!(
+            out,
+            InsertOutcome::CopiedOnly {
+                reason: PasteError::NotLanded
+            }
+        );
+        assert_eq!(m.pasted.len(), 2, "never more than one retry");
+        // Not restored: the text waits on the clipboard for Ctrl+V.
+        assert_eq!(m.clipboard.as_deref(), Some("dictated"));
     }
 
     #[test]
@@ -279,7 +407,13 @@ mod tests {
             ..Default::default()
         };
         let out = insert_text_then(&mut m, "dictated", AfterPaste::Keep);
-        assert_eq!(out, InsertOutcome::Pasted { restored: false });
+        assert_eq!(
+            out,
+            InsertOutcome::Pasted {
+                restored: false,
+                check: PasteCheck::Unchecked
+            }
+        );
         assert_eq!(m.pasted, vec!["dictated"]);
         // Still there to paste again with Ctrl+V if the paste didn't land.
         assert_eq!(m.clipboard.as_deref(), Some("dictated"));
@@ -293,7 +427,13 @@ mod tests {
             ..Default::default()
         };
         let out = insert_text(&mut m, "hello");
-        assert_eq!(out, InsertOutcome::Pasted { restored: false });
+        assert_eq!(
+            out,
+            InsertOutcome::Pasted {
+                restored: false,
+                check: PasteCheck::Unchecked
+            }
+        );
         assert_eq!(m.clipboard.as_deref(), Some("user copied this"));
     }
 

@@ -3,6 +3,7 @@
 
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
+use windows::core::Interface;
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSessionManager as MediaManager,
@@ -11,9 +12,10 @@ use windows::Media::Control::{
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HGLOBAL, HWND, POINT};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardSequenceNumber, OpenClipboard,
-    RegisterClipboardFormatW, SetClipboardData,
+    CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardSequenceNumber,
+    GetOpenClipboardWindow, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
@@ -24,10 +26,14 @@ use windows::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
+use windows::Win32::UI::Accessibility::{
+    CUIAutomation, IUIAutomation, IUIAutomation2, IUIAutomationElement, IUIAutomationTextPattern,
+    IUIAutomationValuePattern, UIA_TextPatternId, UIA_ValuePatternId,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_EXTENDEDKEY,
-    KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_CONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RIGHT, VK_RMENU,
-    VK_RWIN, VK_SHIFT,
+    GetAsyncKeyState, MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_CONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT,
+    VK_LWIN, VK_MENU, VK_RIGHT, VK_RMENU, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, SetWindowLongPtrW, SetWindowPos,
@@ -251,7 +257,9 @@ fn key(vk: VIRTUAL_KEY, up: bool) -> INPUT {
         Anonymous: INPUT_0 {
             ki: KEYBDINPUT {
                 wVk: vk,
-                wScan: 0,
+                // The scan code too, for apps that read it rather than the
+                // virtual key.
+                wScan: unsafe { MapVirtualKeyW(vk.0 as u32, MAPVK_VK_TO_VSC) } as u16,
                 dwFlags: flags,
                 time: 0,
                 dwExtraInfo: 0,
@@ -270,14 +278,126 @@ fn send(inputs: &[INPUT]) -> Result<(), PasteError> {
 }
 
 /// Sends Ctrl+<letter>.
+/// Ctrl+letter the way a person types it: Ctrl down, a moment, the letter,
+/// a moment, Ctrl up. Sent as one burst, some apps (the new Notepad among
+/// them) look at Ctrl after it was already released and miss the shortcut.
 pub fn send_ctrl_key(letter: char) -> Result<(), PasteError> {
     let vk = VIRTUAL_KEY(letter.to_ascii_uppercase() as u16);
-    send(&[
-        key(VK_CONTROL, false),
-        key(vk, false),
-        key(vk, true),
-        key(VK_CONTROL, true),
-    ])
+    send(&[key(VK_CONTROL, false)])?;
+    std::thread::sleep(Duration::from_millis(15));
+    let r = send(&[key(vk, false), key(vk, true)]);
+    std::thread::sleep(Duration::from_millis(15));
+    // Always let go of Ctrl, even if the letter failed.
+    let up = send(&[key(VK_CONTROL, true)]);
+    r.and(up)
+}
+
+/// The program holding the clipboard open right now, if any.
+pub fn clipboard_holder() -> Option<String> {
+    unsafe {
+        let hwnd = GetOpenClipboardWindow().ok()?;
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        Some(process_name(pid).unwrap_or_else(|| "another program".into()))
+    }
+}
+
+/// Waits at least `min` after a clipboard change, and up to `max` until no
+/// other program holds the clipboard. Returns the program seen holding it.
+pub fn wait_clipboard_free(min: Duration, max: Duration) -> Option<String> {
+    let start = Instant::now();
+    let mut seen = None;
+    std::thread::sleep(min);
+    while start.elapsed() < max {
+        match clipboard_holder() {
+            Some(p) => {
+                if seen.is_none() {
+                    seen = Some(p);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            None => break,
+        }
+    }
+    seen
+}
+
+/// The focused text box and what was in it, read through UI Automation (the
+/// interface screen readers use), to tell whether a paste arrived.
+pub struct TextBoxProbe {
+    uia: IUIAutomation,
+    element: IUIAutomationElement,
+    before: String,
+}
+
+fn uia() -> Option<IUIAutomation> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let a: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
+        // A frozen app must not hang Wirl: give up on slow answers.
+        if let Ok(a2) = a.cast::<IUIAutomation2>() {
+            let _ = a2.SetConnectionTimeout(400);
+            let _ = a2.SetTransactionTimeout(400);
+        }
+        Some(a)
+    }
+}
+
+/// Longest text read from a text box (characters). Longer documents aren't
+/// checked: a cut-off read could miss the paste and paste twice.
+const MAX_READ: i32 = 200_000;
+
+fn element_text(el: &IUIAutomationElement) -> Option<String> {
+    unsafe {
+        if el.CurrentIsPassword().map(|b| b.as_bool()).unwrap_or(true) {
+            return None;
+        }
+        if let Ok(tp) = el.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) {
+            if let Ok(s) = tp.DocumentRange().and_then(|r| r.GetText(MAX_READ)) {
+                let s = s.to_string();
+                return (s.encode_utf16().count() < MAX_READ as usize).then_some(s);
+            }
+        }
+        if let Ok(vp) = el.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) {
+            if let Ok(s) = vp.CurrentValue() {
+                let s = s.to_string();
+                return (s.encode_utf16().count() < MAX_READ as usize).then_some(s);
+            }
+        }
+        None
+    }
+}
+
+/// Reads the focused text box before pasting. None if it can't be read.
+pub fn probe_text_box() -> Option<TextBoxProbe> {
+    let uia = uia()?;
+    let element = unsafe { uia.GetFocusedElement() }.ok()?;
+    let before = element_text(&element)?;
+    Some(TextBoxProbe { uia, element, before })
+}
+
+/// After pasting: Some(true) as soon as the text box differs from before,
+/// Some(false) if it's still exactly the same after `wait`, None if it
+/// can't be read any more or the focus moved to something else.
+pub fn text_box_changed(probe: &TextBoxProbe, wait: Duration) -> Option<bool> {
+    let start = Instant::now();
+    loop {
+        let focused = unsafe { probe.uia.GetFocusedElement() }.ok()?;
+        let same = unsafe { probe.uia.CompareElements(&focused, &probe.element) }
+            .map(|b| b.as_bool())
+            .unwrap_or(false);
+        if !same {
+            return None;
+        }
+        let now = element_text(&probe.element)?;
+        if now != probe.before {
+            return Some(true);
+        }
+        if start.elapsed() >= wait {
+            return Some(false);
+        }
+        std::thread::sleep(Duration::from_millis(60));
+    }
 }
 
 fn is_down(vk: VIRTUAL_KEY) -> bool {

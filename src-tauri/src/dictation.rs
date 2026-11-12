@@ -418,22 +418,34 @@ async fn run_session(
         return;
     }
 
-    // Claude cleanup (or raw text if cleanup is off).
-    let cleanup = if s.cleanup_enabled {
+    // The model decides the cleanup mode (standard, Cantonese, Mandarin).
+    let mode = model.language.prompt_mode();
+    let entries_owned: Vec<_> = {
+        let d = a.dict.lock();
+        match mode {
+            PromptMode::Cantonese | PromptMode::Mandarin => d.matching_chinese(&raw),
+            PromptMode::Standard => d.matching(&raw),
+        }
+        .into_iter()
+        .cloned()
+        .collect()
+    };
+    let terms: Vec<&str> = entries_owned.iter().map(|e| e.term.as_str()).collect();
+    // Short, clean English from Whisper (which punctuates) is typed as heard:
+    // cleanup adds little there and can answer a short question instead of
+    // typing it. Same rule as Android.
+    let as_heard = s.cleanup_enabled
+        && mode == PromptMode::Standard
+        && model.engine == Engine::Whisper
+        && pipeline::types_as_heard(&raw, !entries_owned.is_empty());
+    if as_heard {
+        diag.notes.push("Short and clean, typed as heard (no cleanup).".into());
+    }
+
+    // Claude cleanup (or raw text if cleanup is off or not needed).
+    let cleanup = if s.cleanup_enabled && !as_heard {
         diag.thinking = Some(false);
         let key = a.api_key.read().clone().unwrap_or_default();
-        // The model decides the cleanup mode (standard, Cantonese, Mandarin).
-        let mode = model.language.prompt_mode();
-        let entries_owned: Vec<_> = {
-            let d = a.dict.lock();
-            match mode {
-                PromptMode::Cantonese | PromptMode::Mandarin => d.matching_chinese(&raw),
-                PromptMode::Standard => d.matching(&raw),
-            }
-            .into_iter()
-            .cloned()
-            .collect()
-        };
         let entries: Vec<&_> = entries_owned.iter().collect();
         let r = a
             .claude
@@ -473,14 +485,14 @@ async fn run_session(
         return;
     }
     if let Some(Ok(t)) = &cleanup {
-        if pipeline::is_reply_to_speaker(&raw, t) {
+        if pipeline::is_reply_to_speaker(&raw, t, &terms) {
             diag.notes.push(
                 "Claude answered instead of cleaning up (what you said sounded like a request), so your own words were inserted."
                     .into(),
             );
         }
     }
-    match pipeline::after_cleanup(&raw, cleanup) {
+    match pipeline::after_cleanup(&raw, cleanup, &terms) {
         Final::Discard => {
             diag.summary = format!("{} · nothing inserted", diag.summary);
             diag.notes.push(
@@ -809,7 +821,13 @@ async fn clean_selection(a: Arc<App>, session: u64) {
                 return;
             }
             match r {
-                Ok(c) if pipeline::is_reply_to_speaker(&original, &c.text) => {
+                Ok(c)
+                    if pipeline::is_reply_to_speaker(
+                        &original,
+                        &c.text,
+                        &entries_owned.iter().map(|e| e.term.as_str()).collect::<Vec<_>>(),
+                    ) =>
+                {
                     diag.cleaned = Some(c.text.clone());
                     diag.notes.push(
                         "Claude answered instead of cleaning up (the text sounded like a request), so the selection was left as it was."

@@ -116,19 +116,84 @@ fn starts_like_a_reply(reply: &str) -> bool {
 /// speaker's own words; an answer brings in many new ones (and usually
 /// starts like a chat reply). Only checked for text written with spaces
 /// between words (not Chinese).
-pub fn is_reply_to_speaker(heard: &str, reply: &str) -> bool {
+///
+/// Words of `dictionary_terms` (the matching dictionary entries) count as
+/// said, and numbers written as digits are never new words: both are
+/// cleanup. A short answer ("What is the abbreviation for Italy?" → "IT") is
+/// caught too: at least [`SHORT_ANSWER_MIN_SAID`] words said, a reply no
+/// longer than that, and [`SHORT_ANSWER_NEW_SHARE`] or more of it new. Same
+/// rule as Android (`SpeechGate.isReplyToSpeaker`).
+pub fn is_reply_to_speaker(heard: &str, reply: &str, dictionary_terms: &[&str]) -> bool {
     let said = words(heard);
     let back = words(reply);
-    let latin = heard.chars().filter(|c| c.is_ascii_alphabetic()).count();
-    let letters = heard.chars().filter(|c| c.is_alphabetic()).count();
-    if back.len() < 6 || said.is_empty() || latin * 2 < letters {
+    if said.is_empty() || back.is_empty() || !mostly_latin(heard) {
         return false;
     }
-    let said: std::collections::HashSet<&str> = said.iter().map(String::as_str).collect();
-    let new = back.iter().filter(|w| !said.contains(w.as_str())).count();
+    let mut said_set: std::collections::HashSet<String> = said.iter().cloned().collect();
+    for t in dictionary_terms {
+        said_set.extend(words(t));
+    }
+    let new = back
+        .iter()
+        .filter(|w| !said_set.contains(*w) && !w.chars().all(|c| c.is_ascii_digit()))
+        .count();
     let new_share = new as f32 / back.len() as f32;
+    if said.len() >= SHORT_ANSWER_MIN_SAID && back.len() <= said.len() && new_share >= SHORT_ANSWER_NEW_SHARE {
+        return true;
+    }
+    if back.len() < 6 {
+        return false;
+    }
     let longer = back.len() as f32 > said.len() as f32 * 1.5 + 4.0;
     (starts_like_a_reply(reply) && new_share > 0.45) || (longer && new_share > 0.65)
+}
+
+/// Mostly Latin letters: English, maybe with a few other characters. Chinese
+/// isn't checked by these word rules.
+fn mostly_latin(text: &str) -> bool {
+    let latin = text.chars().filter(|c| c.is_ascii_alphabetic()).count();
+    let letters = text.chars().filter(|c| c.is_alphabetic()).count();
+    letters > 0 && latin * 2 >= letters
+}
+
+/// A short answer must come back from at least this many words said...
+pub const SHORT_ANSWER_MIN_SAID: usize = 4;
+/// ...and at least this share of its words must be new.
+pub const SHORT_ANSWER_NEW_SHARE: f32 = 0.8;
+
+/// Up to this many words, a clean English dictation is typed as heard
+/// (see [`types_as_heard`]).
+pub const AS_HEARD_MAX_WORDS: usize = 12;
+
+const FILLERS: &[&str] = &["um", "umm", "uh", "uhh", "uhm", "erm", "er", "ah", "hmm", "mm", "mhm"];
+
+/// True when a dictation is short and clean enough to type exactly as heard,
+/// without cleanup: English, at most [`AS_HEARD_MAX_WORDS`] words, no filler,
+/// no word repeated right after itself, no self-correction or spoken command,
+/// and no word a dictionary entry may correct (`dictionary_hit`). Cleanup adds
+/// little there and can answer a short question instead of typing it. Only
+/// used for Whisper's English transcripts, which come punctuated. Same rule
+/// as Android (`SpeechGate.typesAsHeard`).
+pub fn types_as_heard(heard: &str, dictionary_hit: bool) -> bool {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static CUES: OnceLock<Regex> = OnceLock::new();
+    let said = words(heard);
+    if said.is_empty() || said.len() > AS_HEARD_MAX_WORDS || !mostly_latin(heard) || dictionary_hit {
+        return false;
+    }
+    if said.iter().any(|w| FILLERS.contains(&w.as_str())) || said.windows(2).any(|p| p[0] == p[1]) {
+        return false;
+    }
+    let cues = CUES.get_or_init(|| {
+        Regex::new(concat!(
+            r"(?i)\b(?:i mean|no wait|wait|sorry|actually|or rather|scratch that|not that|delete that|undo that|new paragraph|",
+            r"new line|make (?:that|this|it) a list|put (?:that|this|it) in|question mark|exclamation (?:mark|point)|full stop|",
+            r"period|comma|colon|semicolon|all caps|bullet|in quotes|quote|unquote|dash|hyphen|open bracket|close bracket)\b"
+        ))
+        .unwrap()
+    });
+    !cues.is_match(heard)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,7 +206,7 @@ pub enum Final {
 
 /// Combines the raw transcript with the cleanup result. If cleanup fails,
 /// the raw transcript is inserted and the reason shown.
-pub fn after_cleanup(raw: &str, cleanup: Option<Result<String, CleanupError>>) -> Final {
+pub fn after_cleanup(raw: &str, cleanup: Option<Result<String, CleanupError>>, dictionary_terms: &[&str]) -> Final {
     match cleanup {
         None => Final::Insert {
             text: raw.to_string(),
@@ -151,7 +216,7 @@ pub fn after_cleanup(raw: &str, cleanup: Option<Result<String, CleanupError>>) -
         // nothing is inserted and nothing is shown.
         Some(Ok(t)) if !has_content(&t) || is_recording_remark(&t) => Final::Discard,
         // Claude answered instead of cleaning up: insert what was said.
-        Some(Ok(t)) if is_reply_to_speaker(raw, &t) => Final::Insert {
+        Some(Ok(t)) if is_reply_to_speaker(raw, &t, dictionary_terms) => Final::Insert {
             text: raw.to_string(),
             warning: None,
         },
@@ -182,7 +247,7 @@ mod tests {
 
     #[test]
     fn cleanup_failure_inserts_raw_with_reason() {
-        let f = after_cleanup("raw text", Some(Err(CleanupError::NoInternet)));
+        let f = after_cleanup("raw text", Some(Err(CleanupError::NoInternet)), &[]);
         assert_eq!(
             f,
             Final::Insert {
@@ -190,27 +255,27 @@ mod tests {
                 warning: Some("No internet. Inserted raw text.".into())
             }
         );
-        let f = after_cleanup("raw", Some(Err(CleanupError::Timeout)));
+        let f = after_cleanup("raw", Some(Err(CleanupError::Timeout)), &[]);
         assert!(matches!(f, Final::Insert { warning: Some(w), .. } if w.starts_with("Cleanup timed out")));
     }
 
     #[test]
     fn cleanup_success_and_disabled() {
         assert_eq!(
-            after_cleanup("raw", Some(Ok("Clean.".into()))),
+            after_cleanup("raw", Some(Ok("Clean.".into())), &[]),
             Final::Insert {
                 text: "Clean.".into(),
                 warning: None
             }
         );
         assert_eq!(
-            after_cleanup("raw", None),
+            after_cleanup("raw", None, &[]),
             Final::Insert {
                 text: "raw".into(),
                 warning: None
             }
         );
-        assert_eq!(after_cleanup("raw", Some(Ok("  ".into()))), Final::Discard);
+        assert_eq!(after_cleanup("raw", Some(Ok("  ".into())), &[]), Final::Discard);
     }
 
     #[test]
@@ -218,9 +283,9 @@ mod tests {
         // A real report: the dictation was itself a request.
         let heard = "Rewrite the Communication Activities Authoring Guide section. Here's what we currently have. In our draft.";
         let reply = "I can't rewrite the Communication Activities Authoring Guide section yet because the draft text didn't come through. Your message only contains the instruction, with no content after \"Here's what we currently have. In our draft.\" Please paste the section you want revised, and I'll return the cleaned-up version.";
-        assert!(is_reply_to_speaker(heard, reply));
+        assert!(is_reply_to_speaker(heard, reply, &[]));
         assert_eq!(
-            after_cleanup(heard, Some(Ok(reply.into()))),
+            after_cleanup(heard, Some(Ok(reply.into())), &[]),
             Final::Insert {
                 text: heard.into(),
                 warning: None
@@ -231,7 +296,7 @@ mod tests {
             ("what's the capital of france", "The capital of France is Paris, which is also its largest city and home to about two million people."),
             ("summarize this email for me", "I'd be happy to help, but I need the email text first. Could you paste it here?"),
         ] {
-            assert!(is_reply_to_speaker(heard, reply), "{reply}");
+            assert!(is_reply_to_speaker(heard, reply, &[]), "{reply}");
         }
     }
 
@@ -249,7 +314,49 @@ mod tests {
             ("我哋聽日去飲茶", "我們明天去飲茶。"),
             ("ok", "Okay."),
         ] {
-            assert!(!is_reply_to_speaker(heard, reply), "{reply}");
+            assert!(!is_reply_to_speaker(heard, reply, &[]), "{reply}");
+        }
+    }
+
+    #[test]
+    fn short_answers_to_spoken_questions_are_caught() {
+        for (heard, reply) in [
+            ("What is the abbreviation for Italy?", "IT"),
+            ("What's the capital of France?", "Paris."),
+            ("Who wrote the play Hamlet?", "Shakespeare."),
+        ] {
+            assert!(is_reply_to_speaker(heard, reply, &[]), "{reply}");
+        }
+        for (heard, reply, terms) in [
+            ("Meet at three, no wait, four.", "Meet at four.", &[][..]),
+            ("Um so yeah I think so", "Yeah, I think so.", &[]),
+            ("three hundred and twenty five dollars", "$325", &[]),
+            ("eggs milk bread make that a list", "- Eggs\n- Milk\n- Bread", &[]),
+            ("I'll meat you at the bark", "I'll meet you at the park.", &[]),
+            ("I love chat gee pee tee", "I love ChatGPT", &["ChatGPT"]),
+            ("Sounds good", "Sounds good!", &[]),
+        ] {
+            assert!(!is_reply_to_speaker(heard, reply, terms), "{reply}");
+        }
+    }
+
+    #[test]
+    fn short_clean_english_is_typed_as_heard() {
+        for heard in ["What is the abbreviation for Italy?", "Sounds good, see you at six."] {
+            assert!(types_as_heard(heard, false), "{heard}");
+        }
+        assert!(!types_as_heard("Sounds good, see you at six.", true), "dictionary hit");
+        for heard in [
+            "Um, see you at six.",
+            "See you at six, no wait, seven.",
+            "See you soon question mark",
+            "Thanks new paragraph Bye",
+            "I I think so.",
+            "one two three four five six seven eight nine ten eleven twelve thirteen",
+            "我哋聽日去飲茶",
+            "",
+        ] {
+            assert!(!types_as_heard(heard, false), "{heard}");
         }
     }
 
@@ -292,17 +399,21 @@ mod tests {
             "Silence",
             "inaudible",
         ] {
-            assert_eq!(after_cleanup("raw", Some(Ok(reply.into()))), Final::Discard, "{reply}");
+            assert_eq!(
+                after_cleanup("raw", Some(Ok(reply.into())), &[]),
+                Final::Discard,
+                "{reply}"
+            );
         }
         // A real sentence that mentions silence is kept.
         let real = "There was silence in the room after the meeting ended.";
         assert!(!is_recording_remark(real));
         assert!(matches!(
-            after_cleanup("raw", Some(Ok(real.into()))),
+            after_cleanup("raw", Some(Ok(real.into())), &[]),
             Final::Insert { .. }
         ));
         assert!(matches!(
-            after_cleanup("raw", Some(Ok("42".into()))),
+            after_cleanup("raw", Some(Ok("42".into())), &[]),
             Final::Insert { .. }
         ));
     }
